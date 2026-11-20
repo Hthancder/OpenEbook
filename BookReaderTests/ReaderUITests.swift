@@ -1,5 +1,4 @@
 import XCTest
-@testable import BookReader
 
 final class ReaderUITests: XCTestCase {
     @MainActor

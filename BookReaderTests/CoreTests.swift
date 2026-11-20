@@ -1,6 +1,10 @@
 import Foundation
 import XCTest
+#if SWIFT_PACKAGE
 @testable import BookReaderCore
+#else
+@testable import BookReader
+#endif
 import ReadiumZIPFoundation
 final class CoreTests: XCTestCase {
     func testReadingLocationsRoundTripAcrossSupportedDocuments() throws {
