@@ -1,7 +1,7 @@
 import UIKit
 import SwiftUI
+import ReadiumShared
 import ReadiumNavigator
-
 struct EPUBReaderView: View {
     let book: BookRecord
     let url: URL
