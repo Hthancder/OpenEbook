@@ -20,9 +20,12 @@ struct EPUBArchivePreflight {
         var containerFound = false
         let extractionState = EPUBExtractionState()
         for (index, entry) in entries.enumerated() {
-            guard index < maximumEntries, ImportSecurity.validateArchivePath(entry.path), entry.type != .symlink,
-                  entry.uncompressedSize <= UInt64(maximumEntryBytes), entry.compressedSize <= UInt64(maximumEntryBytes),
-                  !entry.isEncrypted, !entry.isCompressed || entry.compressedSize > 0,
+            guard index < maximumEntries,
+                  ImportSecurity.validateArchivePath(entry.path),
+                  entry.type != .symlink,
+                  entry.uncompressedSize <= UInt64(maximumEntryBytes),
+                  entry.compressedSize <= UInt64(maximumEntryBytes),
+                  !entry.isCompressed || entry.compressedSize > 0,
                   entry.uncompressedSize <= UInt64(Int64.max) else { throw ImportFailure.archiveUnsafe }
             let declaredEntry = Int64(entry.uncompressedSize)
             let (nextDeclared, declaredOverflow) = declaredTotal.addingReportingOverflow(declaredEntry)
@@ -63,7 +66,7 @@ struct EPUBArchivePreflight {
     }
 
     static func read(_ entry: Entry, from archive: Archive, maximum: Int) async throws -> Data {
-        guard maximum >= 0, entry.type == .file, !entry.isEncrypted, entry.uncompressedSize <= UInt64(maximum) else { throw ImportFailure.archiveUnsafe }
+        guard maximum >= 0, entry.type == .file, entry.uncompressedSize <= UInt64(maximum) else { throw ImportFailure.archiveUnsafe }
         let accumulator = EPUBDataAccumulator(maximumBytes: maximum)
         try await archive.extract(entry, bufferSize: 8192) { chunk in try await accumulator.append(chunk) }
         return await accumulator.value()

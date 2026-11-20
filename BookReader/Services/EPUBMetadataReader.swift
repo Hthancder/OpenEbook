@@ -33,7 +33,7 @@ struct EPUBMetadataReader {
     }
 
     private static func read(_ entry: Entry, from archive: Archive, maximum: Int) async throws -> Data {
-        guard maximum >= 0, entry.type == .file, !entry.isEncrypted, entry.uncompressedSize <= UInt64(maximum) else { throw ImportFailure.archiveUnsafe }
+        guard maximum >= 0, entry.type == .file, entry.uncompressedSize <= UInt64(maximum) else { throw ImportFailure.archiveUnsafe }
         let accumulator = EPUBDataAccumulator(maximumBytes: maximum)
         try await archive.extract(entry, bufferSize: 8192) { chunk in try await accumulator.append(chunk) }
         return await accumulator.value()
