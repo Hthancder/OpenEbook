@@ -62,6 +62,7 @@ struct PDFReaderView: View {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button { showingSearch = true } label: { Label("Tìm", systemImage: "magnifyingglass") }
                     .accessibilityLabel("Tìm trong PDF")
+                    .accessibilityIdentifier("pdf-search-button")
                 Menu {
                     Button {
                         onBookmark(ReadingLocation(position: .pdf(page: currentPage, anchorX: nil, anchorY: nil)), "Trang \(currentPage + 1)")
@@ -152,6 +153,8 @@ private struct PDFSearchView: View {
                                 }
                             }
                         }
+                        .accessibilityLabel("Kết quả \(index + 1): \(results[index].string ?? "")")
+                        .accessibilityIdentifier("pdf-search-result-\(index)")
                     }
                 }
             }

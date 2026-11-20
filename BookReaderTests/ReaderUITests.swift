@@ -32,7 +32,7 @@ final class ReaderUITests: XCTestCase {
         openFixture(titled: title, in: app)
         XCTAssertTrue(waitForVisible(start), "The TXT reader should start at StartMarker.")
         attachReaderScreenshot("TXT opened at StartMarker", in: app)
-        tapVisible(app.buttons[searchTitle])
+        tapVisible(app.buttons["text-search-button"])
         let field = app.textFields["text-search-field"]
         tapVisible(field)
         field.typeText("TargetMarker")
@@ -41,7 +41,7 @@ final class ReaderUITests: XCTestCase {
         // Typing can jump to the first hit. Move away so only selecting the row can pass.
         closeSheet(searchTitle, in: app)
         scrollAwayFromTXTTarget(scrollView, target: target)
-        tapVisible(app.buttons[searchTitle])
+        tapVisible(app.buttons["text-search-button"])
         tapVisible(result)
         waitForSheetToClose(searchTitle, in: app)
         XCTAssertTrue(waitForVisible(target), "Selecting the TXT result should bring TargetMarker into view.")
@@ -75,22 +75,21 @@ final class ReaderUITests: XCTestCase {
         // The visual counter is “Trang N / 3”; VoiceOver exposes “Trang N trên 3”.
         let firstPage = app.staticTexts["Trang 1 trên 3"]
         let thirdPage = app.staticTexts["Trang 3 trên 3"]
-        let result = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@ AND label CONTAINS %@", "Kết quả ", "PDFMarker3"
-        )).firstMatch
+        let result = app.buttons["pdf-search-result-0"]
 
         openFixture(titled: title, in: app)
         XCTAssertTrue(waitForVisible(firstPage), "The imported three-page PDF should open on page 1.")
         attachReaderScreenshot("PDF opened on page 1 of 3", in: app)
-        tapVisible(app.buttons[searchTitle])
+        tapVisible(app.buttons["pdf-search-button"])
         let field = app.textFields["pdf-search-field"]
         tapVisible(field)
         field.typeText("PDFMarker3")
         XCTAssertTrue(waitForVisible(result), "The search sheet should show the PDFMarker3 result.")
+        XCTAssertTrue(result.label.contains("PDFMarker3"), "The selected PDF result must contain the queried text.")
 
         closeSheet(searchTitle, in: app)
         scrollBackToFirstPDFPage(in: app, firstPage: firstPage)
-        tapVisible(app.buttons[searchTitle])
+        tapVisible(app.buttons["pdf-search-button"])
         tapVisible(result)
         waitForSheetToClose(searchTitle, in: app)
         XCTAssertTrue(waitForVisible(thirdPage), "Selecting the PDF result should jump to page 3.")

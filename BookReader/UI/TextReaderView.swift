@@ -84,6 +84,7 @@ struct TextReaderView: View {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button { showingSearch = true } label: { Label("Tìm", systemImage: "magnifyingglass") }
                     .accessibilityLabel("Tìm trong văn bản")
+                    .accessibilityIdentifier("text-search-button")
                 Menu {
                     Button {
                         let location = ReadingLocation(position: .text(offset: currentLine, normalizationVersion: 1))
