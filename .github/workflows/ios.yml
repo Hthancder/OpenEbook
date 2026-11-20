@@ -1,0 +1,126 @@
+name: iOS Reader
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'BookReader/**'
+      - 'BookReaderTests/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Scripts/**'
+      - 'project.yml'
+      - 'README.md'
+      - 'BookReader/Resources/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'BookReader/**'
+      - 'BookReaderTests/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'project.yml'
+      - 'README.md'
+      - 'ThirdPartyNotices.md'
+      - 'Scripts/**'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -showsdks | grep -q iOS
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen --version
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          xcodegen generate --spec project.yml
+          test -f BookReader.xcodeproj/project.pbxproj
+      - name: Resolve pinned package graph
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies -project BookReader.xcodeproj -scheme BookReader
+          RESOLVED=BookReader.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          test -s "$RESOLVED"
+          grep -qi 'readium' "$RESOLVED"
+          grep -qi 'zipfoundation' "$RESOLVED"
+          grep -qi 'swiftsoup' "$RESOLVED"
+          test -s BookReader/Resources/ThirdPartyNotices.md
+          grep -q 'ThirdPartyNotices.md' BookReader.xcodeproj/project.pbxproj
+
+      - name: Test portable core and EPUB safety fixtures
+        run: swift test --package-path .
+
+      - name: Test iOS app and UI import smoke test
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project BookReader.xcodeproj \
+            -scheme BookReader \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+      - name: Build unsigned device application
+        run: |
+          set -euo pipefail
+          rm -f BookReader-ios15-unsigned.ipa BookReader-ios15-unsigned.ipa.sha256
+          xcodebuild \
+            -project BookReader.xcodeproj \
+            -scheme BookReader \
+            -sdk iphoneos \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/device \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+          APP=$(find build/device/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$APP"
+          mkdir -p Payload
+          ditto "$APP" "Payload/$(basename "$APP")"
+          APP_NAME=$(basename "$APP")
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "Payload/$APP_NAME/Info.plist" | grep -qx '15.0'
+          APP_BINARY="Payload/$APP_NAME/${APP_NAME%.app}"
+          test -f "$APP_BINARY"
+          xcrun --sdk iphoneos lipo -verify_arch arm64 "$APP_BINARY"
+          /usr/bin/zip -qry BookReader-ios15-unsigned.ipa Payload
+          shasum -a 256 BookReader-ios15-unsigned.ipa > BookReader-ios15-unsigned.ipa.sha256
+          test -s BookReader-ios15-unsigned.ipa
+          rm -rf Payload
+          unzip -tq BookReader-ios15-unsigned.ipa
+          unzip -l BookReader-ios15-unsigned.ipa | grep -Eq 'Payload/[^/]+\.app/Info.plist'
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: BookReader-ios15-unsigned
+          path: |
+            BookReader-ios15-unsigned.ipa
+            BookReader-ios15-unsigned.ipa.sha256
+            BookReader.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          retention-days: 3

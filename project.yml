@@ -1,0 +1,88 @@
+name: BookReader
+options:
+  bundleIdPrefix: app.bookreader
+  deploymentTarget:
+    iOS: '15.0'
+  createIntermediateGroups: true
+  developmentLanguage: en
+packages:
+  Readium:
+    url: https://github.com/readium/swift-toolkit.git
+    exactVersion: 3.11.1
+  ReadiumZIPFoundation:
+    url: https://github.com/readium/ZIPFoundation.git
+    exactVersion: 3.0.1
+  SwiftSoup:
+    url: https://github.com/scinfu/SwiftSoup.git
+    exactVersion: 2.13.5
+targets:
+  BookReader:
+    type: application
+    platform: iOS
+    deploymentTarget: '15.0'
+    sources:
+      - path: BookReader/Domain
+      - path: BookReader/Services
+      - path: BookReader/App
+      - path: BookReader/UI
+      - path: BookReader/Resources
+    dependencies:
+      - package: ReadiumZIPFoundation
+        product: ReadiumZIPFoundation
+      - package: SwiftSoup
+        product: SwiftSoup
+      - package: Readium
+        product: ReadiumShared
+      - package: Readium
+        product: ReadiumStreamer
+      - package: Readium
+        product: ReadiumNavigator
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.bookreader.ios
+        PRODUCT_NAME: BookReader
+        SWIFT_VERSION: '5.10'
+        IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+        TARGETED_DEVICE_FAMILY: '1,2'
+        INFOPLIST_KEY_CFBundleDisplayName: 'Đọc sách'
+        GENERATE_INFOPLIST_FILE: YES
+  BookReaderTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: '15.0'
+    sources:
+      - path: BookReaderTests/BookReaderTests.swift
+      - path: BookReaderTests/CoreTests.swift
+      - path: BookReaderTests/FoundationTests.swift
+    dependencies:
+      - target: BookReader
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.bookreader.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BookReader.app/BookReader"
+  BookReaderUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: '15.0'
+    sources:
+      - path: BookReaderTests/ReaderUITests.swift
+    dependencies:
+      - target: BookReader
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.bookreader.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: BookReader
+schemes:
+  BookReader:
+    build:
+      targets:
+        BookReader: all
+        BookReaderTests: [test]
+        BookReaderUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - BookReaderTests
+        - BookReaderUITests

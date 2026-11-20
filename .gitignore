@@ -1,0 +1,6 @@
+graphify-out/
+.ai/STATE/journal.jsonl
+*.xcuserstate
+DerivedData/
+build/
+.DS_Store
