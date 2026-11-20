@@ -22,12 +22,21 @@ final class AppModel: ObservableObject {
     let paths: BookPathStore?
     let importer: ImportService?
     private var importTask: Task<Void, Never>?
+#if DEBUG && targetEnvironment(simulator)
+    private var readerFixtureTask: Task<Void, Never>?
+#endif
 
     init() {
         textSize = UserDefaults.standard.object(forKey: "reader.textSize") as? Double ?? 18
         textBackgroundName = UserDefaults.standard.string(forKey: "reader.textBackground") ?? "paper"
         do {
-            let uiTesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
+            let arguments = ProcessInfo.processInfo.arguments
+#if DEBUG && targetEnvironment(simulator)
+            let readerUITesting = arguments.contains("--uitesting-readers")
+#else
+            let readerUITesting = false
+#endif
+            let uiTesting = arguments.contains("--uitesting") && !readerUITesting
             let paths = try BookPathStore()
             let library = try PersistentLibraryStore(inMemory: uiTesting)
             self.paths = paths
@@ -37,6 +46,14 @@ final class AppModel: ObservableObject {
             if !uiTesting && !LibraryRecovery.inspect(paths: paths, records: books).isEmpty {
                 importMessage = "Thư viện cần kiểm tra các tệp chưa hoàn tất. Dữ liệu chưa bị xóa."
             }
+#if DEBUG && targetEnvironment(simulator)
+            let processInfo = ProcessInfo.processInfo
+            if readerUITesting,
+               let fixtureIDString = processInfo.environment["BOOKREADER_TEST_FIXTURE_ID"],
+               let fixtureID = UUID(uuidString: fixtureIDString) {
+                importReaderFixtures(id: fixtureID)
+            }
+#endif
         } catch {
             self.library = (try? PersistentLibraryStore(inMemory: true)) ?? UnavailableLibraryStore()
             self.paths = nil
@@ -46,6 +63,63 @@ final class AppModel: ObservableObject {
     }
 
     func reload() { books = library.allBooks() }
+#if DEBUG && targetEnvironment(simulator)
+    private func importReaderFixtures(id: UUID) {
+        let textTitle = "Reader TXT \(id.uuidString)"
+        let pdfTitle = "Reader PDF \(id.uuidString)"
+        let booksToCreate = [
+            (title: textTitle, fileName: "\(textTitle).txt"),
+            (title: pdfTitle, fileName: "\(pdfTitle).pdf")
+        ].filter { fixture in !library.allBooks().contains(where: { $0.title == fixture.title }) }
+        guard !booksToCreate.isEmpty else { return }
+        guard let importer else {
+            importMessage = "Thư viện chưa sẵn sàng."
+            return
+        }
+
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BookReaderUITesting-\(id.uuidString)-\(UUID().uuidString)", isDirectory: true)
+        readerFixtureTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.readerFixtureTask = nil
+                try? FileManager.default.removeItem(at: fixtureDirectory)
+            }
+            do {
+                try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+                for fixture in booksToCreate {
+                    let sourceURL = fixtureDirectory.appendingPathComponent(fixture.fileName)
+                    if fixture.title == textTitle {
+                        let textLines = ["StartMarker"] + (1...99).map { $0 == 20 ? "TargetMarker" : "Line \($0)" } + ["EndMarker", "Fixture UUID \(id.uuidString)"]
+                        try textLines.joined(separator: "\n").write(to: sourceURL, atomically: true, encoding: .utf8)
+                    } else {
+                        let pageBounds = CGRect(x: 0, y: 0, width: 300, height: 400)
+                        let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
+                        let pdfData = renderer.pdfData { context in
+                            for page in 1...3 {
+                                context.beginPage()
+                                let pageAttributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 24)]
+                                let fixtureAttributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 8)]
+                                ("PDF page \(page)" as NSString).draw(at: CGPoint(x: 30, y: 40), withAttributes: pageAttributes)
+                                ("PDFMarker\(page)" as NSString).draw(at: CGPoint(x: 30, y: 90), withAttributes: pageAttributes)
+                                ("Fixture UUID \(id.uuidString)" as NSString).draw(at: CGPoint(x: 30, y: 370), withAttributes: fixtureAttributes)
+                            }
+                        }
+                        try pdfData.write(to: sourceURL, options: .atomic)
+                    }
+                    let result = await importer.importFile(from: sourceURL)
+                    self.reload()
+                    if let failure = result.failure {
+                        self.importMessage = "\(sourceURL.lastPathComponent): \(failure.message)"
+                    }
+                }
+            } catch {
+                self.importMessage = "Không thể tạo dữ liệu đọc kiểm thử: \(error.localizedDescription)"
+            }
+        }
+    }
+#endif
+
     func importFiles(_ urls: [URL]) {
         guard !urls.isEmpty, !isImporting else { return }
         guard let importer else { importMessage = "Thư viện chưa sẵn sàng."; return }

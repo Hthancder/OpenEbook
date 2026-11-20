@@ -92,6 +92,12 @@ jobs:
             ditto "$HOME/Library/Logs/DiagnosticReports" build/diagnostics/CrashReports
           fi
           xcrun simctl list devices > build/diagnostics/simulators.txt
+      - name: Export simulator screenshots
+        if: always()
+        run: |
+          if [ -d build/SimulatorTests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/SimulatorTests.xcresult --output-path build/screenshots || echo '::warning::Screenshot export failed; xcresult bundle remains available.'
+          fi
       - name: Upload simulator evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -100,6 +106,7 @@ jobs:
           path: |
             build/SimulatorTests.xcresult
             build/diagnostics
+            build/screenshots
           if-no-files-found: ignore
       - name: Build unsigned device application
         run: |

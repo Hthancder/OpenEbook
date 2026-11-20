@@ -74,7 +74,7 @@ struct LibraryView: View {
             Button("Hủy", role: .cancel) { bookToDelete = nil }
         } message: { Text(bookToDelete?.title ?? "") }
         .alert("Thông báo", isPresented: Binding(
-            get: { model.importMessage != nil },
+            get: { selectedBook == nil && model.importMessage != nil },
             set: { if !$0 { model.importMessage = nil } }
         )) {
             Button("Đóng", role: .cancel) { model.importMessage = nil }

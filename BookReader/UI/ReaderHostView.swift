@@ -6,19 +6,23 @@ struct ReaderHostView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var pendingDelete = false
 
+    private var currentBookmarks: [ReaderBookmark] {
+        decodeBookmarks((model.books.first { $0.id == book.id } ?? book).bookmarkJSON)
+    }
+
     var body: some View {
         Group {
             switch book.format {
             case .pdf:
                 if let url = model.fileURL(for: book) {
-                    PDFReaderView(url: url, initialLocation: decodeLocation(book.locatorJSON), bookmarks: decodeBookmarks(book.bookmarkJSON), onPageChange: { page, progress in
+                    PDFReaderView(url: url, initialLocation: decodeLocation(book.locatorJSON), bookmarks: currentBookmarks, onPageChange: { page, progress in
                         let location = ReadingLocation(position: .pdf(page: page, anchorX: nil, anchorY: nil))
                         model.saveLocation(location, progress: progress, for: book)
                     }, onBookmark: { location, title in model.addBookmark(location, title: title, for: book) })
                 } else { missingFileView }
             case .txt:
                 if let url = model.fileURL(for: book) {
-                    TextReaderView(url: url, initialLocation: decodeLocation(book.locatorJSON), bookmarks: decodeBookmarks(book.bookmarkJSON), textSize: model.textSize, onLocation: { location, progress in
+                    TextReaderView(url: url, initialLocation: decodeLocation(book.locatorJSON), bookmarks: currentBookmarks, textSize: model.textSize, onLocation: { location, progress in
                         model.saveLocation(location, progress: progress, for: book)
                     }, onBookmark: { location, title in model.addBookmark(location, title: title, for: book) })
                         .background(textBackground)
@@ -52,6 +56,12 @@ struct ReaderHostView: View {
             }
             Button("Hủy", role: .cancel) {}
         }
+        .alert("Thông báo", isPresented: Binding(
+            get: { model.importMessage != nil },
+            set: { if !$0 { model.importMessage = nil } }
+        )) {
+            Button("Đóng", role: .cancel) { model.importMessage = nil }
+        } message: { Text(model.importMessage ?? "") }
     }
 
     private var textBackground: Color {

@@ -16,6 +16,7 @@ struct TextReaderView: View {
     @State private var currentLine = 0
     @State private var showBookmarks = false
     @State private var selectedBookmarkLine: Int?
+    @State private var hasRestoredPosition = false
 
     private var lines: [String] { (text ?? "").components(separatedBy: .newlines) }
     private var safeTextSize: Double { textSize.isFinite ? min(max(textSize, 14), 30) : 18 }
@@ -44,19 +45,26 @@ struct TextReaderView: View {
                                     .id(index)
                                     .background(GeometryReader { geometry in
                                         Color.clear.preference(key: TextVisiblePreferenceKey.self,
-                                            value: geometry.frame(in: .named("readerScroll")).minY < 700 ? index : nil)
-                                    }.frame(height: 0))
+                                            value: geometry.frame(in: .named("readerScroll")).maxY > 0 ? index : nil)
+                                    })
                             }
                         }.padding(.horizontal, 20).padding(.vertical, 12)
                     }
                     .coordinateSpace(name: "readerScroll")
                     .onPreferenceChange(TextVisiblePreferenceKey.self) { value in
-                        if let value {
+                        if hasRestoredPosition, let value {
                             currentLine = min(max(value, 0), max(lines.count - 1, 0))
                             persistPosition(at: currentLine)
                         }
                     }
-                    .onAppear { DispatchQueue.main.async { proxy.scrollTo(initialLine, anchor: .top) } }
+                    .onAppear {
+                        let line = initialLine
+                        currentLine = line
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(line, anchor: .top)
+                            DispatchQueue.main.async { hasRestoredPosition = true }
+                        }
+                    }
                     .onChange(of: searchMatches) { matches in
                         if let first = matches.first { withAnimation { proxy.scrollTo(first, anchor: .center) } }
                     }
@@ -136,7 +144,7 @@ struct TextReaderView: View {
 private struct TextVisiblePreferenceKey: PreferenceKey {
     static var defaultValue: Int?
     static func reduce(value: inout Int?, nextValue: () -> Int?) {
-        if let next = nextValue() { value = next }
+        if let next = nextValue() { value = min(value ?? next, next) }
     }
 }
 
