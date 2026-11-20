@@ -173,7 +173,7 @@ private final class EPUBSafeNavigatorDelegate: NSObject, EPUBNavigatorDelegate {
         self.onLocation = onLocation
     }
 
-    func navigator(_ navigator: Navigator, locationDidChange locator: Locator) { onLocation(locator) }
+    func navigator(_ navigator: Navigator, presentError error: NavigatorError) {}
     func navigator(_ navigator: EPUBNavigatorViewController, setupUserScripts userContentController: WKUserContentController) {
         userContentController.add(rules)
     }

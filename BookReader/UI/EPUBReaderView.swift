@@ -1,6 +1,6 @@
 import UIKit
 import SwiftUI
-import ReadiumShared
+import ReadiumNavigator
 
 struct EPUBReaderView: View {
     let book: BookRecord
@@ -72,7 +72,7 @@ struct EPUBReaderView: View {
         }
     }
 
-    private func contents(_ links: [Link], depth: Int = 0) -> [AnyView] {
+    private func contents(_ links: [ReadiumShared.Link], depth: Int = 0) -> [AnyView] {
         links.flatMap { link -> [AnyView] in
             let row = AnyView(Button {
                 navigation.navigate(to: link)
