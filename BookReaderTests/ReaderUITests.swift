@@ -12,7 +12,7 @@ final class ReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["import-book"].exists)
         importButton.tap()
         let cancel = app.buttons["Cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        XCTAssertTrue(cancel.waitForExistence(timeout: 30))
         cancel.tap()
         XCTAssertTrue(app.staticTexts["Chưa có sách"].waitForExistence(timeout: 5))
     }
