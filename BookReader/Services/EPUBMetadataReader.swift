@@ -10,7 +10,7 @@ struct EPUBMetadataReader {
         let containerData = try await read(containerEntry, from: archive, maximum: EPUBArchivePreflight.maximumContainerBytes)
         let containerText = try safeXMLText(containerData)
         let container = try SwiftSoup.parseXML(containerData)
-        guard let rootfile = try container.select("rootfile[full-path]").first() else { throw ImportFailure.invalid }
+        guard let rootfile = firstElement(named: "rootfile", in: container) else { throw ImportFailure.invalid }
         let packagePath = try rootfile.attr("full-path")
         guard ImportSecurity.validateArchivePath(packagePath), let packageEntry = try await archive.get(packagePath) else { throw ImportFailure.invalid }
         let packageData = try await read(packageEntry, from: archive, maximum: EPUBArchivePreflight.maximumPackageBytes)
@@ -19,11 +19,11 @@ struct EPUBMetadataReader {
 
     private static func parse(containerText: String, packageData: Data, packagePath: String, fallbackTitle: String) throws -> EPUBMetadata {
         let container = try SwiftSoup.parseXML(Data(containerText.utf8))
-        guard let rootfile = try container.select("rootfile[full-path]").first(), try rootfile.attr("full-path") == packagePath else { throw ImportFailure.invalid }
+        guard let rootfile = firstElement(named: "rootfile", in: container), try rootfile.attr("full-path") == packagePath else { throw ImportFailure.invalid }
         let packageText = try safeXMLText(packageData)
         let package = try SwiftSoup.parseXML(Data(packageText.utf8))
-        guard try package.tagName().lowercased() == "package" else { throw ImportFailure.invalid }
-        let metadata = firstElement(named: "metadata", in: package)
+        guard let packageElement = firstElement(named: "package", in: package) else { throw ImportFailure.invalid }
+        let metadata = firstElement(named: "metadata", in: packageElement)
         guard let metadata else { throw ImportFailure.invalid }
         let titleElement = firstElement(named: "title", in: metadata)
         let rawTitle = try titleElement?.text().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -32,7 +32,7 @@ struct EPUBMetadataReader {
         let creatorElement = firstElement(named: "creator", in: metadata)
         let rawAuthor = try creatorElement?.text().trimmingCharacters(in: .whitespacesAndNewlines)
         let author = rawAuthor.flatMap { $0.isEmpty ? nil : $0 }
-        let manifest = firstElement(named: "manifest", in: package)
+        let manifest = firstElement(named: "manifest", in: packageElement)
         let cover = try manifest?.select("item[properties~=cover-image]").first()?.attr("href")
         return EPUBMetadata(title: title, author: author, coverPath: cover.flatMap { relativePath($0, from: packagePath) })
     }
