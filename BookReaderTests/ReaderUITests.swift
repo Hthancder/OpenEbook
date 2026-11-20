@@ -180,8 +180,10 @@ final class ReaderUITests: XCTestCase {
 
     @MainActor
     private func scrollBackToFirstPDFPage(in app: XCUIApplication, firstPage: XCUIElement) {
-        app.swipeDown()
-        app.swipeDown()
+        let document = app.descendants(matching: .any).matching(identifier: "pdf-document-view").firstMatch
+        XCTAssertTrue(document.waitForExistence(timeout: 5))
+        document.swipeDown()
+        document.swipeDown()
         XCTAssertTrue(waitForVisible(firstPage), "Return to page 1 before testing the jump to page 3.")
     }
 

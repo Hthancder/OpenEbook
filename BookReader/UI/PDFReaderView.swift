@@ -177,6 +177,7 @@ private struct PDFKitReader: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PDFView {
         let view = PDFView()
+        view.accessibilityIdentifier = "pdf-document-view"
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
