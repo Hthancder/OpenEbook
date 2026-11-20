@@ -23,19 +23,27 @@ struct EPUBMetadataReader {
         let packageText = try safeXMLText(packageData)
         let package = try SwiftSoup.parseXML(Data(packageText.utf8))
         guard try package.tagName().lowercased() == "package" else { throw ImportFailure.invalid }
-        let metadata = try package.select("metadata").first()
-            ?? package.select("opf|metadata").first()
-            ?? package.select("*:matchesOwn(^metadata$)").first()
+        let metadata = firstElement(named: "metadata", in: package)
         guard let metadata else { throw ImportFailure.invalid }
-        let titleElement = try metadata.select("title").first() ?? metadata.select("dc|title").first()
+        let titleElement = firstElement(named: "title", in: metadata)
         let rawTitle = try titleElement?.text().trimmingCharacters(in: .whitespacesAndNewlines)
         let title = rawTitle.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle
         guard !title.isEmpty else { throw ImportFailure.invalid }
-        let creatorElement = try metadata.select("creator").first() ?? metadata.select("dc|creator").first()
+        let creatorElement = firstElement(named: "creator", in: metadata)
         let rawAuthor = try creatorElement?.text().trimmingCharacters(in: .whitespacesAndNewlines)
         let author = rawAuthor.flatMap { $0.isEmpty ? nil : $0 }
-        let cover = try package.select("manifest item[properties~=cover-image]").first()?.attr("href")
+        let manifest = firstElement(named: "manifest", in: package)
+        let cover = try manifest?.select("item[properties~=cover-image]").first()?.attr("href")
         return EPUBMetadata(title: title, author: author, coverPath: cover.flatMap { relativePath($0, from: packagePath) })
+    }
+
+    private static func firstElement(named name: String, in element: Element) -> Element? {
+        for child in element.children() {
+            let localName = child.tagName().split(separator: ":").last.map(String.init) ?? child.tagName()
+            if localName.caseInsensitiveCompare(name) == .orderedSame { return child }
+            if let match = firstElement(named: name, in: child) { return match }
+        }
+        return nil
     }
 
     private static func read(_ entry: Entry, from archive: Archive, maximum: Int) async throws -> Data {
