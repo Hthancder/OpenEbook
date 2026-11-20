@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import ReadiumZIPFoundation
+@testable import BookReaderCore
 
 final class CoreTests: XCTestCase {
     func testReadingLocationsRoundTripAcrossSupportedDocuments() throws {
