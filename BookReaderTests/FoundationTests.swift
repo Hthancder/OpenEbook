@@ -47,7 +47,8 @@ final class FoundationTests: XCTestCase {
         let bookmark = ReaderBookmark(locatorJSON: String(decoding: try JSONEncoder().encode(location), as: UTF8.self), title: "Dòng 4")
         try store.updateBookmarks(id: id, bookmarksJSON: String(decoding: try JSONEncoder().encode([bookmark]), as: UTF8.self))
         let loaded = try XCTUnwrap(store.book(id: id))
-        XCTAssertEqual(loaded.locatorJSON, String(decoding: try JSONEncoder().encode(location), as: UTF8.self))
+        let storedLocation = try JSONDecoder().decode(ReadingLocation.self, from: Data(try XCTUnwrap(loaded.locatorJSON).utf8))
+        XCTAssertEqual(storedLocation, location)
         XCTAssertEqual(loaded.progress, 0.6, accuracy: 0.0001)
         XCTAssertEqual(try JSONDecoder().decode([ReaderBookmark].self, from: Data(try XCTUnwrap(loaded.bookmarkJSON).utf8)), [bookmark])
     }
