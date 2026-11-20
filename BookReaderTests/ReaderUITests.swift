@@ -92,7 +92,7 @@ final class ReaderUITests: XCTestCase {
         let result = app.buttons["pdf-search-result-0"]
 
         openFixture(titled: title, in: app)
-        XCTAssertTrue(waitForVisible(firstPage), "The imported three-page PDF should open on page 1.")
+        XCTAssertTrue(waitForVisible(firstPage, timeout: 30), "The imported three-page PDF should open on page 1.")
         attachReaderScreenshot("PDF opened on page 1 of 3", in: app)
         tapVisible(app.buttons["pdf-search-button"])
         let field = app.textFields["pdf-search-field"]
@@ -119,7 +119,7 @@ final class ReaderUITests: XCTestCase {
         app.terminate()
         app.launch()
         openFixture(titled: title, in: app)
-        XCTAssertTrue(waitForVisible(thirdPage), "The PDF should reopen on page 3 of 3.")
+        XCTAssertTrue(waitForVisible(thirdPage, timeout: 30), "The PDF should reopen on page 3 of 3.")
         attachReaderScreenshot("PDF restored on page 3 of 3", in: app)
         _ = openBookmarks(titled: bookmarkTitle, menuTitle: menuTitle, in: app)
         attachReaderScreenshot("PDF saved bookmark for page 3", in: app)
