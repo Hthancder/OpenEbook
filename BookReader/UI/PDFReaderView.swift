@@ -191,10 +191,11 @@ private struct PDFKitReader: UIViewRepresentable {
         context.coordinator.pdfView = view
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.pageChanged(_:)), name: .PDFViewPageChanged, object: view)
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.goToSelection(_:)), name: .pdfReaderGoToSelection, object: nil)
-        context.coordinator.updateDocument()
         DispatchQueue.main.async { [weak view] in
             guard let view, let page = view.document?.page(at: max(initialPage, 0)) else { return }
+            context.coordinator.updateDocument()
             view.go(to: page)
+            context.coordinator.pageChanged(Notification(name: .PDFViewPageChanged, object: view))
         }
         return view
     }
@@ -235,7 +236,8 @@ private struct PDFKitReader: UIViewRepresentable {
             activeQuery = nil
             onSearchResults([], hasText)
             onOutline(Self.outlineEntries(document.outlineRoot, document: document))
-            if let page = pdfView?.currentPage { onPageChange(document.index(for: page), document.pageCount) }
+            let pageIndex = pdfView?.currentPage.map { document.index(for: $0) } ?? 0
+            onPageChange(pageIndex, document.pageCount)
         }
 
         func search(_ query: String) {

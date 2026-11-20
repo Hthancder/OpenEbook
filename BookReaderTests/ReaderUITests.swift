@@ -1,6 +1,20 @@
 import XCTest
 
 final class ReaderUITests: XCTestCase {
+    override func record(_ issue: XCTIssue) {
+        if issue.type == .assertionFailure {
+            let app = XCUIApplication()
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "Reader failure screen"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            let hierarchy = XCTAttachment(string: app.debugDescription)
+            hierarchy.name = "Reader failure accessibility hierarchy"
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
+        }
+        super.record(issue)
+    }
     @MainActor
     func testEmptyLibraryShowsImportControlsAndPickerCanCancel() {
         let app = XCUIApplication()
