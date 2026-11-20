@@ -55,6 +55,7 @@ final class CoreTests: XCTestCase {
         let archive = try await Archive(url: url, accessMode: .create)
         try await add("META-INF/container.xml", "<?xml version=\"1.0\"?><container><rootfiles><rootfile full-path=\"OEBPS/content.opf\"/></rootfiles></container>", to: archive)
         try await add("OEBPS/content.opf", "<?xml version=\"1.0\"?><package version=\"3.0\" xmlns=\"http://www.idpf.org/2007/opf\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><metadata><dc:title>Thử &amp; đọc</dc:title><dc:creator>Nguyễn Văn A</dc:creator></metadata><manifest><item id=\"cover\" href=\"images/cover.jpg\" properties=\"cover-image\"/></manifest><spine/></package>", to: archive)
+        try await EPUBArchivePreflight.validate(url: url)
         let metadata = try await EPUBMetadataReader.read(url: url, fallbackTitle: "fallback")
         XCTAssertEqual(metadata.title, "Thử & đọc")
         XCTAssertEqual(metadata.author, "Nguyễn Văn A")

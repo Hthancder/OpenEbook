@@ -52,7 +52,8 @@ struct EPUBArchivePreflight {
         let packageData = try await read(packageEntry, from: archive, maximum: maximumPackageBytes)
         guard let packageText = String(data: packageData, encoding: .utf8),
               !containsExternalEntityDeclaration(packageText) else { throw ImportFailure.invalid }
-        let package = try SwiftSoup.parseXML(packageData)
+        let packageDocument = try SwiftSoup.parseXML(packageData)
+        guard let package = packageDocument.children().first(where: { $0.tagName() == "package" }) else { throw ImportFailure.invalid }
         let version = try package.attr("version")
         guard try package.tagName().lowercased() == "package", version.hasPrefix("2.") || version.hasPrefix("3."),
               try package.select("metadata").first() != nil,

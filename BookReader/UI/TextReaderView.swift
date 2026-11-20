@@ -13,6 +13,8 @@ struct TextReaderView: View {
     @State private var searchText = ""
     @State private var searchMatches: [Int] = []
     @State private var showingSearch = false
+    @State private var currentLine = 0
+    @State private var showBookmarks = false
     @State private var selectedBookmarkLine: Int?
 
     private var lines: [String] { (text ?? "").components(separatedBy: .newlines) }
@@ -75,11 +77,11 @@ struct TextReaderView: View {
                 Button { showingSearch = true } label: { Label("Tìm", systemImage: "magnifyingglass") }
                     .accessibilityLabel("Tìm trong văn bản")
                 Menu {
-                    Button("Đánh dấu dòng \(currentLine + 1)", systemImage: "bookmark") {
+                    Button {
                         let location = ReadingLocation(position: .text(offset: currentLine, normalizationVersion: 1))
                         onBookmark(location, "Dòng \(currentLine + 1)")
-                    }
-                    Button("Dấu trang", systemImage: "bookmarks") { showBookmarks = true }
+                    } label: { Label("Đánh dấu dòng \(currentLine + 1)", systemImage: "bookmark") }
+                    Button { showBookmarks = true } label: { Label("Dấu trang", systemImage: "bookmarks") }
                 } label: { Label("Công cụ đọc", systemImage: "ellipsis.circle") }
             }
         }

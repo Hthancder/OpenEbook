@@ -16,6 +16,8 @@ struct PDFReaderView: View {
     @State private var currentPage = 0
     @State private var pageCount = 0
     @State private var canSearch = false
+    @State private var searchText = ""
+    @State private var showingSearch = false
     @State private var searchResults: [PDFSelection] = []
     @State private var selectedSearchResult = 0
     @State private var showBookmarks = false
@@ -61,16 +63,16 @@ struct PDFReaderView: View {
                 Button { showingSearch = true } label: { Label("Tìm", systemImage: "magnifyingglass") }
                     .accessibilityLabel("Tìm trong PDF")
                 Menu {
-                    Button("Đánh dấu trang \(currentPage + 1)", systemImage: "bookmark") {
+                    Button {
                         onBookmark(ReadingLocation(position: .pdf(page: currentPage, anchorX: nil, anchorY: nil)), "Trang \(currentPage + 1)")
-                    }
-                    Button("Dấu trang", systemImage: "bookmarks") { showBookmarks = true }
+                    } label: { Label("Đánh dấu trang \(currentPage + 1)", systemImage: "bookmark") }
+                    Button { showBookmarks = true } label: { Label("Dấu trang", systemImage: "bookmarks") }
                     if !outline.isEmpty {
                         Menu("Nội dung") { ForEach(outline) { entry in Button(entry.title) { navigate(to: entry.page) } } }
                     }
                     if !searchResults.isEmpty {
-                        Button("Kết quả trước", systemImage: "chevron.up") { moveSearchResult(-1) }
-                        Button("Kết quả tiếp", systemImage: "chevron.down") { moveSearchResult(1) }
+                        Button { moveSearchResult(-1) } label: { Label("Kết quả trước", systemImage: "chevron.up") }
+                        Button { moveSearchResult(1) } label: { Label("Kết quả tiếp", systemImage: "chevron.down") }
                     }
                 } label: { Label("Công cụ PDF", systemImage: "ellipsis.circle") }
                     .accessibilityLabel("Dấu trang và nội dung PDF")
@@ -78,7 +80,12 @@ struct PDFReaderView: View {
         }
         .sheet(isPresented: $showBookmarks) { bookmarkSheet }
         .sheet(isPresented: $showingSearch) {
-            PDFSearchView(text: $searchText) { showingSearch = false }
+            PDFSearchView(text: $searchText, results: searchResults, canSearch: canSearch) { index in
+                guard searchResults.indices.contains(index) else { return }
+                selectedSearchResult = index
+                NotificationCenter.default.post(name: .pdfReaderGoToSelection, object: searchResults[index])
+                showingSearch = false
+            }
         }
     }
 
@@ -98,6 +105,10 @@ struct PDFReaderView: View {
         }
     }
 
+    private func navigate(to page: Int) {
+        pendingPage = min(max(page, 0), max(pageCount - 1, 0))
+    }
+
     private func moveSearchResult(_ delta: Int) {
         guard !searchResults.isEmpty else { return }
         selectedSearchResult = (selectedSearchResult + delta + searchResults.count) % searchResults.count
@@ -106,6 +117,48 @@ struct PDFReaderView: View {
     private func decodeLocation(_ json: String) -> ReadingLocation? {
         guard let data = json.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(ReadingLocation.self, from: data)
+    }
+}
+
+private struct PDFSearchView: View {
+    @Binding var text: String
+    let results: [PDFSelection]
+    let canSearch: Bool
+    let onSelect: (Int) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            List {
+                TextField("Từ khóa", text: $text)
+                    .textInputAutocapitalization(.never)
+                    .accessibilityIdentifier("pdf-search-field")
+                if !canSearch {
+                    Text("PDF này không có lớp văn bản để tìm kiếm.").foregroundColor(.secondary)
+                } else if text.isEmpty {
+                    Text("Nhập từ khóa để tìm trong PDF.").foregroundColor(.secondary)
+                } else if results.isEmpty {
+                    Text("Không tìm thấy kết quả.").foregroundColor(.secondary)
+                } else {
+                    ForEach(results.indices, id: \.self) { index in
+                        Button {
+                            onSelect(index)
+                            dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Kết quả \(index + 1)")
+                                if let match = results[index].string, !match.isEmpty {
+                                    Text(match).font(.subheadline).foregroundColor(.secondary).lineLimit(3)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Tìm trong PDF")
+            .navigationBarItems(trailing: Button("Đóng") { dismiss() })
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
     }
 }
 
@@ -143,7 +196,7 @@ private struct PDFKitReader: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ view: PDFView, coordinator: Coordinator) {
-        NotificationCenter.default.removeObserver(coordinator, object: view)
+        NotificationCenter.default.removeObserver(coordinator)
     }
 
     func updateUIView(_ view: PDFView, context: Context) {

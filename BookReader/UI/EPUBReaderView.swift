@@ -8,6 +8,7 @@ struct EPUBReaderView: View {
     @ObservedObject var model: AppModel
     @StateObject private var navigation = EPUBNavigationModel()
     @Environment(\.dismiss) private var dismiss
+    @State private var showingContents = false
     @State private var showingBookmarks = false
     @State private var showingSearch = false
     @State private var searchQuery = ""
@@ -35,9 +36,18 @@ struct EPUBReaderView: View {
                         .accessibilityLabel("Tìm trong EPUB")
                 }
                 Menu {
-                    if !navigation.contents.isEmpty { Button("Mục lục", systemImage: "list.bullet") { showingContents = true } }
-                    Button("Đánh dấu vị trí", systemImage: "bookmark") { navigation.addCurrentBookmark(for: book, model: model) }
-                    Button("Dấu trang", systemImage: "bookmarks") { navigation.showBookmarks(for: book, model: model); showingBookmarks = true }
+                    if !navigation.contents.isEmpty {
+                        Button { showingContents = true } label: { Label("Mục lục", systemImage: "list.bullet") }
+                    }
+                    Button { navigation.addCurrentBookmark(for: book, model: model) } label: {
+                        Label("Đánh dấu vị trí", systemImage: "bookmark")
+                    }
+                    Button {
+                        navigation.showBookmarks(for: book, model: model)
+                        showingBookmarks = true
+                    } label: {
+                        Label("Dấu trang", systemImage: "bookmarks")
+                    }
                     if navigation.isReflowable {
                         Slider(value: $navigation.fontSize, in: 14...30, step: 1).accessibilityLabel("Cỡ chữ EPUB")
                         Slider(value: $navigation.lineSpacing, in: 1...1.8, step: 0.1).accessibilityLabel("Giãn dòng EPUB")
@@ -55,8 +65,10 @@ struct EPUBReaderView: View {
         .sheet(isPresented: $showingSearch) {
             EPUBSearchView(text: $searchQuery, onSubmit: { navigation.search(searchQuery) })
         }
-        .alert("Thông báo EPUB", isPresented: Binding(get: { navigation.searchMessage != nil }, set: { if !$0 { navigation.searchMessage = nil } })) {
-            Button("Đóng", role: .cancel) { navigation.searchMessage = nil }
+        .alert("Thông báo EPUB", isPresented: Binding(get: { navigation.readerMessage != nil }, set: { if !$0 { navigation.readerMessage = nil } })) {
+            Button("Đóng", role: .cancel) { navigation.readerMessage = nil }
+        } message: {
+            Text(navigation.readerMessage ?? "")
         }
         .onAppear {
             guard navigation.navigator == nil, navigation.errorMessage == nil else { return }
@@ -66,7 +78,10 @@ struct EPUBReaderView: View {
 
     private var contentsSheet: some View {
         NavigationView {
-            List { contents(navigation.contents) }
+            let rows = contents(navigation.contents)
+            List(rows.indices, id: \.self) { index in
+                rows[index]
+            }
                 .navigationTitle("Mục lục")
                 .navigationBarItems(trailing: Button("Đóng") { showingContents = false })
         }

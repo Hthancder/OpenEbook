@@ -6,6 +6,7 @@ struct LibraryView: View {
     @State private var showingImporter = false
     @State private var showingSettings = false
     @State private var searchText = ""
+    @State private var showingSearch = false
     @State private var sortOption = LibrarySortOption.recent
     @State private var selectedBook: BookRecord?
     @State private var bookToDelete: BookRecord?
@@ -59,6 +60,10 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $showingSettings) { SettingsView(model: model) }
+        .fullScreenCover(item: $selectedBook) { book in
+            NavigationView { ReaderHostView(book: book, model: model) }
+                .navigationViewStyle(StackNavigationViewStyle())
+        }
         .alert("Xóa sách?", isPresented: Binding(get: { bookToDelete != nil }, set: { if !$0 { bookToDelete = nil } })) {
             Button("Xóa", role: .destructive) {
                 guard let book = bookToDelete else { return }
@@ -68,6 +73,12 @@ struct LibraryView: View {
             }
             Button("Hủy", role: .cancel) { bookToDelete = nil }
         } message: { Text(bookToDelete?.title ?? "") }
+        .alert("Thông báo", isPresented: Binding(
+            get: { model.importMessage != nil },
+            set: { if !$0 { model.importMessage = nil } }
+        )) {
+            Button("Đóng", role: .cancel) { model.importMessage = nil }
+        } message: { Text(model.importMessage ?? "") }
     }
 
 

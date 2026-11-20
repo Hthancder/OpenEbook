@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import ReadiumShared
 import ReadiumNavigator
@@ -9,7 +10,7 @@ import UIKit
 final class EPUBNavigationModel: ObservableObject {
     @Published var navigator: EPUBNavigatorViewController?
     @Published var errorMessage: String?
-    @Published var searchMessage: String?
+    @Published var readerMessage: String?
     @Published var contents: [Link] = []
     @Published var bookmarks: [ReaderBookmark] = []
     @Published var isSearchable = false
@@ -43,6 +44,7 @@ final class EPUBNavigationModel: ObservableObject {
         let initialLocator = initialLocatorJSON.flatMap { try? Locator(legacyJSONString: $0) }
         Task { @MainActor in
             do {
+                guard let contentRuleListStore else { throw ImportFailure.networkPolicy }
                 let policy = "[{\"trigger\":{\"url-filter\":\"^https?://\"},\"action\":{\"type\":\"block\"}}]"
                 let rules = try await contentRuleListStore.compileContentRuleList(forIdentifier: "BookReader.BlockExternal", encodedContentRuleList: policy)
                 guard let rules else { throw ImportFailure.networkPolicy }
@@ -67,14 +69,25 @@ final class EPUBNavigationModel: ObservableObject {
                 config.preloadPreviousPositionCount = 1
                 config.preloadNextPositionCount = 2
                 let controller = try EPUBNavigatorViewController(publication: publication, initialLocation: initialLocator, config: config)
-                let delegate = EPUBSafeNavigatorDelegate(rules: rules, onLocation: { [weak self] in self?.onLocation?($0) })
+                let delegate = EPUBSafeNavigatorDelegate(
+                    rules: rules,
+                    onLocation: { [weak self] in self?.onLocation?($0) },
+                    onError: { [weak self] error in
+                        switch error {
+                        case .copyForbidden:
+                            self?.readerMessage = "Giấy phép của sách không cho phép sao chép văn bản."
+                        @unknown default:
+                            self?.readerMessage = "Đã xảy ra lỗi khi đọc EPUB."
+                        }
+                    }
+                )
                 controller.delegate = delegate
                 objc_setAssociatedObject(controller, &epubDelegateAssociationKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
                 self.publication = publication
                 self.preferences = loadedPreferences
                 self.navigator = controller
-                self.contents = publication.tableOfContents
+                self.contents = publication.manifest.tableOfContents
                 self.isSearchable = publication.isSearchable
                 self.isReflowable = publication.metadata.layout != .fixed
                 self.fontSize = min(max(textSize.isFinite ? textSize : 18, 14), 30)
@@ -89,7 +102,7 @@ final class EPUBNavigationModel: ObservableObject {
         let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         guard isSearchable, let publication, let navigator else {
-            searchMessage = "Sách này không cung cấp tìm kiếm."
+            readerMessage = "Sách này không cung cấp tìm kiếm."
             return
         }
         searchTask = Task { @MainActor in
@@ -97,17 +110,17 @@ final class EPUBNavigationModel: ObservableObject {
             guard !Task.isCancelled else { return }
             switch result {
             case .failure:
-                searchMessage = "Không thể tìm trong sách."
+                readerMessage = "Không thể tìm trong sách."
             case .success(let iterator):
                 do {
-                    guard let page = try await iterator.next()?.get(), let locator = page.locators.first else {
-                        searchMessage = "Không tìm thấy kết quả."
+                    guard let page = try await iterator.next().get(), let locator = page.locators.first else {
+                        readerMessage = "Không tìm thấy kết quả."
                         return
                     }
                     guard !Task.isCancelled else { return }
                     await navigator.go(to: locator)
-                    searchMessage = "Đã đến kết quả đầu tiên."
-                } catch { searchMessage = "Không thể đọc kết quả tìm kiếm." }
+                    readerMessage = "Đã đến kết quả đầu tiên."
+                } catch { readerMessage = "Không thể đọc kết quả tìm kiếm." }
             }
         }
     }
@@ -120,7 +133,7 @@ final class EPUBNavigationModel: ObservableObject {
     func addCurrentBookmark(for book: BookRecord, model: AppModel) {
         guard let navigator, let locator = navigator.currentLocation,
               let json = try? locator.jsonString() else {
-            searchMessage = "Vị trí đọc chưa sẵn sàng để đánh dấu."
+            readerMessage = "Vị trí đọc chưa sẵn sàng để đánh dấu."
             return
         }
         let location = ReadingLocation(position: .epub(locatorJSON: json, locatorVersion: 1))
@@ -130,7 +143,7 @@ final class EPUBNavigationModel: ObservableObject {
 
     func showBookmarks(for book: BookRecord, model: AppModel) {
         bookmarks = Self.decodeBookmarks(model.library.book(id: book.id)?.bookmarkJSON)
-        if bookmarks.isEmpty { searchMessage = "Chưa có dấu trang." }
+        if bookmarks.isEmpty { readerMessage = "Chưa có dấu trang." }
     }
 
     func navigate(to bookmark: ReaderBookmark) {
@@ -167,13 +180,22 @@ private var epubDelegateAssociationKey = "book-reader-epub-delegate" as NSString
 private final class EPUBSafeNavigatorDelegate: NSObject, EPUBNavigatorDelegate {
     private let rules: WKContentRuleList
     private let onLocation: (Locator) -> Void
+    private let onError: (NavigatorError) -> Void
 
-    init(rules: WKContentRuleList, onLocation: @escaping (Locator) -> Void) {
+    init(rules: WKContentRuleList, onLocation: @escaping (Locator) -> Void, onError: @escaping (NavigatorError) -> Void) {
         self.rules = rules
         self.onLocation = onLocation
+        self.onError = onError
     }
 
-    func navigator(_ navigator: Navigator, presentError error: NavigatorError) {}
+    func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
+        onLocation(locator)
+    }
+
+    func navigator(_ navigator: Navigator, presentError error: NavigatorError) {
+        onError(error)
+    }
+
     func navigator(_ navigator: EPUBNavigatorViewController, setupUserScripts userContentController: WKUserContentController) {
         userContentController.add(rules)
     }
