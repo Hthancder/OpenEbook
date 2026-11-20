@@ -87,7 +87,7 @@ final class AppModel: ObservableObject {
     }
 
     func markOpened(_ book: BookRecord) {
-        do { try library.updateLastOpened(id: book.id); reload() }
+        do { try library.updateLastOpened(id: book.id, at: Date()); reload() }
         catch { importMessage = "Không thể ghi nhận lần mở sách này." }
     }
 
@@ -107,7 +107,7 @@ final class AppModel: ObservableObject {
     func saveLocation(_ location: ReadingLocation, progress: Double? = nil, for book: BookRecord) {
         do {
             try library.updateLocation(id: book.id, location: location)
-            try library.updateLastOpened(id: book.id)
+            try library.updateLastOpened(id: book.id, at: Date())
             if let progress { try library.updateProgress(id: book.id, progress: progress) }
             reload()
         } catch { importMessage = "Không thể lưu vị trí đọc mới." }
