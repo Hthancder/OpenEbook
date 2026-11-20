@@ -130,7 +130,6 @@ final class PersistentLibraryStore: LibraryStore {
         let entity = NSEntityDescription()
         entity.name = "BookRecordEntity"
         entity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
-        entity.uniquenessConstraints = [["id"], ["sha256"]]
         entity.properties = [
             attribute("id", .UUIDAttributeType, optional: false), attribute("relativePath", .stringAttributeType, optional: false),
             attribute("format", .stringAttributeType, optional: false), attribute("title", .stringAttributeType, optional: false),
@@ -140,6 +139,7 @@ final class PersistentLibraryStore: LibraryStore {
             attribute("locatorJSON", .stringAttributeType), attribute("bookmarkJSON", .stringAttributeType), attribute("coverPath", .stringAttributeType)
         ]
         let model = NSManagedObjectModel()
+        entity.uniquenessConstraints = [["id"], ["sha256"]]
         model.entities = [entity]
         return model
     }

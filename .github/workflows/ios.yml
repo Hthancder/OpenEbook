@@ -79,9 +79,28 @@ jobs:
             -sdk iphonesimulator \
             -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -resultBundlePath build/SimulatorTests.xcresult \
             IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             CODE_SIGNING_ALLOWED=NO \
             test
+      - name: Collect simulator failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p build/diagnostics
+          xcrun simctl spawn booted log show --last 15m --style compact --predicate 'process == "BookReader" OR eventMessage CONTAINS "app.bookreader.ios"' > build/diagnostics/simulator.log 2>&1 || true
+          if [ -d "$HOME/Library/Logs/DiagnosticReports" ]; then
+            ditto "$HOME/Library/Logs/DiagnosticReports" build/diagnostics/CrashReports
+          fi
+          xcrun simctl list devices > build/diagnostics/simulators.txt
+      - name: Upload simulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-evidence
+          path: |
+            build/SimulatorTests.xcresult
+            build/diagnostics
+          if-no-files-found: ignore
       - name: Build unsigned device application
         run: |
           set -euo pipefail
