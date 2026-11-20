@@ -126,7 +126,7 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "Payload/$APP_NAME/Info.plist" | grep -qx '15.0'
           APP_BINARY="Payload/$APP_NAME/${APP_NAME%.app}"
           test -f "$APP_BINARY"
-          xcrun --sdk iphoneos lipo -verify_arch arm64 "$APP_BINARY"
+          xcrun --sdk iphoneos lipo "$APP_BINARY" -verify_arch arm64
           /usr/bin/zip -qry BookReader-ios15-unsigned.ipa Payload
           shasum -a 256 BookReader-ios15-unsigned.ipa > BookReader-ios15-unsigned.ipa.sha256
           test -s BookReader-ios15-unsigned.ipa
