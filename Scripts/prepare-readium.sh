@@ -28,7 +28,16 @@ git -C "$SOURCE" diff --exit-code HEAD -- . \
   ':(exclude)Sources/Navigator/EPUB/EPUBNavigatorViewController.swift' \
   ':(exclude)Sources/Navigator/EPUB/EPUBNavigatorViewModel.swift' \
   ':(exclude)Sources/Navigator/EPUB/EPUBSpreadView.swift' \
-  ':(exclude)Sources/Navigator/EPUB/WebViewServer.swift'
+  ':(exclude)Sources/Navigator/EPUB/WebViewServer.swift' \
+  ':(exclude)Sources/Navigator/EPUB/EPUBFixedSpreadView.swift' \
+  ':(exclude)Sources/Navigator/EPUB/Scripts/src/fixed-page.js' \
+  ':(exclude)Sources/Navigator/EPUB/Scripts/src/decorator.js' \
+  ':(exclude)Sources/Navigator/EPUB/Scripts/src/index-fixed-wrapper-one.js' \
+  ':(exclude)Sources/Navigator/EPUB/Scripts/src/index-fixed-wrapper-two.js' \
+  ':(exclude)Sources/Navigator/EPUB/Assets/Static/scripts/readium-fixed-wrapper-one.js' \
+  ':(exclude)Sources/Navigator/EPUB/Assets/Static/scripts/readium-fixed-wrapper-two.js' \
+  ':(exclude)Sources/Navigator/EPUB/Assets/Static/scripts/readium-fixed.js' \
+  ':(exclude)Sources/Navigator/EPUB/Assets/Static/scripts/readium-reflowable.js'
 (cd "$SOURCE" && shasum -a 256 -c "$ROOT/Scripts/Patches/readium-3.11.1-offline.sha256")
 test -s "$SOURCE/LICENSE"
 printf 'Readium %s with reviewed offline patch\n' "$REVISION"

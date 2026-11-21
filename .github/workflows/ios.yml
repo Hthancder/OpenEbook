@@ -70,19 +70,38 @@ jobs:
       - name: Test portable core and EPUB safety fixtures
         run: swift test --package-path .
 
-      - name: Prove EPUB first-load DNS isolation
+      - name: Prove EPUB navigator DNS isolation
         run: |
           set -euo pipefail
+          SIMULATOR_ID=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          runtimes = sorted(
+              (key for key in devices if key.startswith("com.apple.CoreSimulator.SimRuntime.iOS-")),
+              key=lambda key: tuple(map(int, key.rsplit(".iOS-", 1)[1].split("-"))),
+              reverse=True,
+          )
+          for runtime in runtimes:
+              matches = [d["udid"] for d in devices[runtime] if d["name"] == "iPhone 16"]
+              if matches:
+                  if len(matches) != 1:
+                      sys.exit("Multiple iPhone 16 simulators on " + runtime)
+                  print(matches[0])
+                  break
+          else:
+              sys.exit("No available iPhone 16 simulator")
+          ')
           xcodebuild \
             -project BookReader.xcodeproj \
             -scheme BookReader \
             -sdk iphonesimulator \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -only-testing:BookReaderTests/EPUBIsolationTests \
             IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             CODE_SIGNING_ALLOWED=NO \
             build-for-testing
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
           python3 Scripts/run-epub-isolation.py -- \
             xcodebuild \
               -project BookReader.xcodeproj \
@@ -91,7 +110,8 @@ jobs:
               -configuration Debug \
               -resultBundlePath build/EPUBIsolationTests.xcresult \
               -only-testing:BookReaderTests/EPUBIsolationTests \
-              -destination 'platform=iOS Simulator,name=iPhone 16' \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+              -parallel-testing-enabled NO \
               -test-timeouts-enabled YES \
               -maximum-test-execution-time-allowance 180 \
               IPHONEOS_DEPLOYMENT_TARGET=15.0 \

@@ -59,6 +59,7 @@ final class EPUBIsolationTests: XCTestCase {
 
     @MainActor
     private func verifyHostilePublication(rules: WKContentRuleList, fixedLayout: Bool) async throws {
+        print("EPUB isolation phase: \(fixedLayout ? "fixed" : "reflowable") opening")
         let strict = try await TrafficObserver()
         defer { strict.stop() }
         let fixtureURL = try await makeFixture(remotePort: strict.port, fixedLayout: fixedLayout)
@@ -70,6 +71,7 @@ final class EPUBIsolationTests: XCTestCase {
             if let firstWindow { teardown(firstWindow) }
         }
         guard let first = firstWindow else { throw ImportFailure.invalid }
+        print("EPUB isolation phase: first local content")
         let firstLocal = await waitForJavaScript(first.navigator, "document.body && document.body.innerText.includes('LOCAL-CHAPTER-1')", timeout: 20)
         XCTAssertTrue(firstLocal, "The first local chapter did not render")
         let firstHrefIsLocal = await waitForJavaScript(first.navigator, "document.location.href.indexOf('http://') !== 0 && document.location.href.indexOf('https://') !== 0", timeout: 5)
@@ -78,26 +80,38 @@ final class EPUBIsolationTests: XCTestCase {
         XCTAssertTrue(firstScriptsBlocked, "Publisher or remote active-attempt scripts executed")
 
         guard publication.readingOrder.count >= 4 else { throw ImportFailure.invalid }
-        let movedToTwo = await first.navigator.go(to: publication.readingOrder[1])
+        print("EPUB isolation phase: chapter two")
+        let movedToTwo = await waitForNavigation(first.navigator, link: publication.readingOrder[1], timeout: 20)
         XCTAssertTrue(movedToTwo, "The second local chapter could not be selected")
         let secondLocal = await waitForJavaScript(first.navigator, "document.body && document.body.innerText.includes('LOCAL-CHAPTER-2')", timeout: 20)
         XCTAssertTrue(secondLocal, "The second local chapter did not render")
         let secondScriptsBlocked = await waitForJavaScript(first.navigator, "window.authorRan === undefined && window.remoteRan === undefined && window.fetchRan === undefined && window.wsRan === undefined && window.formRan === undefined && window.locationRan === undefined", timeout: 5)
         XCTAssertTrue(secondScriptsBlocked, "Active attempts executed after a same-webview chapter change")
-        let movedToThree = await first.navigator.go(to: publication.readingOrder[2])
+        print("EPUB isolation phase: chapter three")
+        let movedToThree = await waitForNavigation(first.navigator, link: publication.readingOrder[2], timeout: 20)
         XCTAssertTrue(movedToThree, "The third local chapter could not be selected")
         let thirdLocal = await waitForJavaScript(first.navigator, "document.body && document.body.innerText.includes('LOCAL-CHAPTER-3')", timeout: 20)
         XCTAssertTrue(thirdLocal, "The third local chapter did not render")
 
-        let movedToSVG = await first.navigator.go(to: publication.readingOrder[3])
+        print("EPUB isolation phase: standalone SVG")
+        let movedToSVG = await waitForNavigation(first.navigator, link: publication.readingOrder[3], timeout: 20)
         XCTAssertTrue(movedToSVG, "The standalone SVG resource could not be selected")
         let svgLocal = await waitForJavaScript(first.navigator, "document.documentElement.textContent.includes('LOCAL-SVG')", timeout: 20)
         XCTAssertTrue(svgLocal, "The standalone SVG did not render local content")
         let svgScriptsBlocked = await waitForJavaScript(first.navigator, "window.authorRan === undefined && window.remoteRan === undefined", timeout: 5)
         XCTAssertTrue(svgScriptsBlocked, "The standalone SVG executed publisher scripts")
+        if fixedLayout {
+            guard publication.readingOrder.count >= 5 else { throw ImportFailure.invalid }
+            print("EPUB isolation phase: bitmap blob wrapper")
+            let movedToBitmap = await waitForNavigation(first.navigator, link: publication.readingOrder[4], timeout: 20)
+            XCTAssertTrue(movedToBitmap, "The local bitmap page could not be selected")
+            let bitmapLocal = await waitForJavaScript(first.navigator, "document.querySelector('img')?.naturalWidth === 24", timeout: 20)
+            XCTAssertTrue(bitmapLocal, "The local bitmap did not render in its generated wrapper")
+        }
         teardown(first)
         firstWindow = nil
         let secondWindow = try await presentNavigator(publication: publication, rules: rules)
+        print("EPUB isolation phase: recreated local content")
         defer { teardown(secondWindow) }
         let recreatedLocal = await waitForJavaScript(secondWindow.navigator, "document.body && document.body.innerText.includes('LOCAL-CHAPTER-1')", timeout: 20)
         XCTAssertTrue(recreatedLocal, "The recreated web view did not render local chapter one")
@@ -178,13 +192,38 @@ final class EPUBIsolationTests: XCTestCase {
         presented.window.isHidden = true
     }
 
-    private func waitForJavaScript(_ navigator: EPUBNavigatorViewController, _ script: String, timeout: TimeInterval) async -> Bool {
+    @MainActor
+    private func waitForNavigation(_ navigator: EPUBNavigatorViewController, link: Link, timeout: TimeInterval) async -> Bool {
+        var completed: Bool?
+        let navigation = Task { @MainActor in
+            completed = await navigator.go(to: link)
+        }
+        defer { navigation.cancel() }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if case .success(let value) = await navigator.evaluateJavaScript(script),
-               (value as? Bool == true || (value as? NSNumber)?.boolValue == true) {
-                return true
+            if let completed { return completed }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    @MainActor
+    private func waitForJavaScript(_ navigator: EPUBNavigatorViewController, _ script: String, timeout: TimeInterval) async -> Bool {
+        var matched = false
+        let evaluation = Task { @MainActor in
+            while !Task.isCancelled {
+                if case .success(let value) = await navigator.evaluateJavaScript(script),
+                   (value as? Bool == true || (value as? NSNumber)?.boolValue == true) {
+                    matched = true
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
             }
+        }
+        defer { evaluation.cancel() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if matched { return true }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return false
@@ -199,7 +238,7 @@ final class EPUBIsolationTests: XCTestCase {
         let entries: [(String, String)] = [
             ("mimetype", "application/epub+zip"),
             ("META-INF/container.xml", "<?xml version=\"1.0\"?><container xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>"),
-            ("OEBPS/content.opf", "<?xml version=\"1.0\"?><package version=\"3.0\" unique-identifier=\"book-id\" xmlns=\"http://www.idpf.org/2007/opf\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><metadata><dc:identifier id=\"book-id\">urn:uuid:epub-isolation</dc:identifier><dc:title>Isolation Fixture</dc:title><dc:language>en</dc:language><meta property=\"rendition:layout\">\(layout)</meta><meta property=\"rendition:spread\">none</meta></metadata><manifest><item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/><item id=\"one\" href=\"chapter1.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"two\" href=\"chapter2.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"three\" href=\"chapter3.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"svg\" href=\"standalone.svg\" media-type=\"image/svg+xml\"/><item id=\"css\" href=\"hostile.css\" media-type=\"text/css\"/></manifest><spine><itemref idref=\"one\"/><itemref idref=\"two\"/><itemref idref=\"three\"/><itemref idref=\"svg\"/></spine></package>"),
+            ("OEBPS/content.opf", "<?xml version=\"1.0\"?><package version=\"3.0\" unique-identifier=\"book-id\" xmlns=\"http://www.idpf.org/2007/opf\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><metadata><dc:identifier id=\"book-id\">urn:uuid:epub-isolation</dc:identifier><dc:title>Isolation Fixture</dc:title><dc:language>en</dc:language><meta property=\"rendition:layout\">\(layout)</meta><meta property=\"rendition:spread\">none</meta></metadata><manifest><item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/><item id=\"one\" href=\"chapter1.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"two\" href=\"chapter2.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"three\" href=\"chapter3.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"svg\" href=\"standalone.svg\" media-type=\"image/svg+xml\"/><item id=\"css\" href=\"hostile.css\" media-type=\"text/css\"/><item id=\"bitmap\" href=\"local.png\" media-type=\"image/png\"/></manifest><spine><itemref idref=\"one\"/><itemref idref=\"two\"/><itemref idref=\"three\"/><itemref idref=\"svg\"/><itemref idref=\"bitmap\"/></spine></package>"),
             ("OEBPS/nav.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><body><nav epub:type=\"toc\"><ol><li><a href=\"chapter1.xhtml\">One</a></li><li><a href=\"chapter2.xhtml\">Two</a></li><li><a href=\"chapter3.xhtml\">Three</a></li></ol></nav></body></html>"),
             ("OEBPS/chapter1.xhtml", hostileChapter(marker: "LOCAL-CHAPTER-1", remote: remote, dnsHostname: dnsHostname)),
             ("OEBPS/chapter2.xhtml", hostileChapter(marker: "LOCAL-CHAPTER-2", remote: remote, dnsHostname: dnsHostname)),
@@ -214,6 +253,11 @@ final class EPUBIsolationTests: XCTestCase {
                 let end = min(start + size, data.count)
                 return start < end ? Data(data[start..<end]) : Data()
             }
+        }
+        let bitmap = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAPElEQVR4AezSwQkAQAgDwXD993xqBfvKb0F/QWHIS/Kbew/2fm98gLYSSYQCGLBFEqEABmyRRCiAgXqLBgAA///pDt5OAAAABklEQVQDALNbGBk/PHvSAAAAAElFTkSuQmCC")!
+        try await archive.addEntry(with: "OEBPS/local.png", type: .file, uncompressedSize: Int64(bitmap.count)) { position, size in
+            let start = Int(position)
+            return Data(bitmap[start..<min(start + size, bitmap.count)])
         }
         return url
     }

@@ -19,9 +19,12 @@ ROOT = Path(__file__).resolve().parent.parent
 READY_TIMEOUT_SECONDS = 20
 TEST_TIMEOUT_SECONDS = 20 * 60
 CHILD_SHUTDOWN_SECONDS = 10
+TCPDUMP = "/usr/sbin/tcpdump"
 FILTER = "port 53 or udp port 5353"
-LISTENING = re.compile(r"\blistening on pktap(?:,all)?\b", re.IGNORECASE)
-KERNEL_DROPS = re.compile(r"^(\d+) packets dropped by kernel$", re.IGNORECASE)
+INTERFACE = re.compile(r"^([A-Za-z][\w.-]*): flags=([0-9a-fA-F]+)(?:<[^>]*>)?(?=\s|$)")
+# Ordinary link types with IP decoders; metadata taps are not permitted.
+LINK_TYPES = {"EN10MB", "NULL", "LOOP", "RAW", "IPV4", "IPV6", "PPP", "IEEE802_11", "IEEE802_11_RADIO"}
+STATS = re.compile(r"^(\d+) packets? (captured|received by filter|dropped by kernel|dropped by interface)$")
 MARKER = re.compile(
     r"\b(bookreader-(control|strict)-[0-9a-f-]+\.example\.com)\b", re.IGNORECASE
 )
@@ -32,164 +35,225 @@ class CaptureError(RuntimeError):
     pass
 
 
-class InterruptedRun(Exception):
-    def __init__(self, signum):
-        self.signum = signum
+RUN_ERRORS = (CaptureError, OSError, subprocess.SubprocessError)
+
+
+def macos_command(*command):
+    return subprocess.run(
+        command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env={**os.environ, "LC_ALL": "C"},
+        timeout=CHILD_SHUTDOWN_SECONDS,
+    )
+
+
+def network_snapshot():
+    result = macos_command("/sbin/ifconfig", "-a")
+    if result.returncode or result.stderr.strip():
+        raise CaptureError(f"ifconfig failed (exit {result.returncode}): {result.stderr.strip()}")
+    active = set()
+    interface = None
+    up = False
+    for line in result.stdout.splitlines():
+        if line and not line[0].isspace():
+            header = INTERFACE.match(line)
+            if not header:
+                raise CaptureError("could not parse an ifconfig interface header")
+            interface = header[1]
+            up = bool(int(header[2], 16) & 1)  # IFF_UP, not media status or IFF_RUNNING
+        elif up and re.match(r"^\s+inet6?\s", line):
+            active.add(interface)
+    if not active:
+        raise CaptureError("ifconfig found no UP IPv4/IPv6 interfaces")
+
+    routes = {}
+    for family, option in (("ipv4", "-inet"), ("ipv6", "-inet6")):
+        result = macos_command("/sbin/route", "-n", "get", option, "default")
+        stderr = result.stderr.strip()
+        matches = re.findall(r"^\s*interface:[ \t]+(\S+)[ \t]*$", result.stdout, re.MULTILINE)
+        # Darwin route get can return 0 even when there is no default route.
+        if not matches and stderr in {
+            "route: writing to routing socket: not in table",
+            "route: message indicates error 3: No such process",
+        }:
+            routes[family] = None
+        elif result.returncode or stderr or len(matches) != 1:
+            raise CaptureError(f"could not determine {family} default route (exit {result.returncode}): {stderr}")
+        else:
+            routes[family] = matches[0]
+    return {"interfaces": sorted(active), "default_route_interfaces": routes}
+
+
+def require_default_coverage(snapshot):
+    for family, interface in snapshot["default_route_interfaces"].items():
+        if interface is not None and interface not in snapshot["interfaces"]:
+            raise CaptureError(f"{family} default route uses uncovered interface {interface}")
 
 
 class Capture:
-    def __init__(self, log_file):
+    def __init__(self, interface, sudo, log_file, log_lock):
+        self.interface = interface
+        self.sudo = sudo
         self.log_file = log_file
-        self.log_lock = threading.Lock()
-        self.state_lock = threading.Lock()
+        self.log_lock = log_lock
         self.ready = threading.Event()
         self.process = None
         self.readers = []
-        self.exit_code = None
+        self.eof = set()
         self.early_exit = False
         self.control_seen = False
         self.strict_seen = False
-        self.kernel_drops = None
-        self.stderr_tail = []
-        self.reader_error = None
+        self.link_type = None
+        self.stats = {}
+        self.errors = []
 
     def start(self):
-        tcpdump = "/usr/sbin/tcpdump"
-        sudo = shutil.which("sudo")
-        if not Path(tcpdump).is_file() or sudo is None:
-            raise CaptureError("macOS tcpdump or sudo is unavailable")
-
         self.process = subprocess.Popen(
-            [sudo, "-n", tcpdump, "-i", "pktap,all", "-B", "16384", "-l", "-n", "-s", "0", "-vvv", FILTER],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            start_new_session=True,
+            [self.sudo, "-n", TCPDUMP, "-i", self.interface, "-p", "-B", "16384",
+             "--immediate-mode", "-l", "-nn", "-s", "0", "-vvv", FILTER],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", bufsize=1, start_new_session=True,
+            env={**os.environ, "LC_ALL": "C"},
         )
-        self.readers = [
-            threading.Thread(target=self._read_stream, args=(self.process.stdout, False), daemon=True),
-            threading.Thread(target=self._read_stream, args=(self.process.stderr, True), daemon=True),
-        ]
-        for reader in self.readers:
+        for stream, name in ((self.process.stdout, "stdout"), (self.process.stderr, "stderr")):
+            reader = threading.Thread(target=self._read_stream, args=(stream, name), daemon=True)
             reader.start()
+            self.readers.append(reader)
 
-        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
-        while not self.ready.wait(0.1):
-            if self.process.poll() is not None:
-                self._join_readers()
-                raise self._capture_failure(
-                    f"tcpdump exited before pktap,all became ready (exit {self.process.returncode})"
-                )
-            if time.monotonic() >= deadline:
-                self.stop()
-                raise CaptureError("timed out waiting for tcpdump pktap,all readiness")
-
-    def _read_stream(self, stream, is_stderr):
+    def _read_stream(self, stream, name):
         try:
-            for line in stream:
-                with self.log_lock:
-                    self.log_file.write(line)
-                    self.log_file.flush()
-                if is_stderr:
-                    stripped = line.strip()
-                    self.stderr_tail.append(stripped)
-                    del self.stderr_tail[:-20]
-                    drops = KERNEL_DROPS.fullmatch(stripped)
-                    if drops:
-                        self.kernel_drops = int(drops.group(1))
-                    if LISTENING.search(line):
-                        self.ready.set()
-                else:
-                    for _hostname, kind in MARKER.findall(line):
-                        with self.state_lock:
+            with stream:
+                for line in stream:
+                    if name == "stderr":
+                        self._read_status(line.strip())
+                    else:
+                        for hostname, kind in MARKER.findall(line):
                             if kind.lower() == "control":
                                 self.control_seen = True
-                            elif kind.lower() == "strict":
+                            else:
                                 self.strict_seen = True
+                            with self.log_lock:
+                                print(f"{self.interface}: {hostname.lower()}", file=self.log_file, flush=True)
+            self.eof.add(name)
         except (OSError, ValueError) as exc:
-            self.reader_error = f"capture output reader failed: {exc}"
+            self.errors.append(f"capture {name} reader failed: {exc}")
 
-    def _capture_failure(self, detail):
-        diagnostic = "; ".join(self.stderr_tail)
-        return CaptureError(f"{detail}: {diagnostic}" if diagnostic else detail)
+    def _read_status(self, line):
+        prefix = f"tcpdump: listening on {self.interface}, link-type "
+        if line.startswith(prefix):
+            self.link_type = line[len(prefix):].partition(" ")[0]
+            if self.link_type not in LINK_TYPES:
+                self.errors.append(f"unsupported capture link type: {self.link_type!r}")
+            else:
+                self.ready.set()
+        elif stats := STATS.fullmatch(line):
+            key = stats[2]
+            if key in self.stats:
+                self.errors.append(f"duplicate tcpdump statistic: {key}")
+            self.stats[key] = int(stats[1])
+        elif line:
+            self.errors.append(line)
 
     def _signal_group(self, signum):
-        if self.process is None:
-            return
-        try:
-            os.killpg(self.process.pid, signum)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            sudo = shutil.which("sudo")
-            if sudo is None:
-                raise CaptureError("cannot signal the owned privileged capture group")
-            result = subprocess.run(
-                [sudo, "-n", "/bin/kill", "-s", signal.Signals(signum).name[3:], "--", f"-{self.process.pid}"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=CHILD_SHUTDOWN_SECONDS,
-            )
-            if result.returncode != 0 and self.process.poll() is None:
-                raise CaptureError("privileged capture group did not accept the shutdown signal")
-
-    def _join_readers(self):
-        for reader in self.readers:
-            reader.join(timeout=2)
-        if any(reader.is_alive() for reader in self.readers):
-            self.reader_error = "capture output did not reach EOF"
-            raise CaptureError(self.reader_error)
-
-    def stop(self):
-        if self.process is None:
-            return
-        if self.process.poll() is None:
-            self._signal_group(signal.SIGINT)
+        # SIGKILL must reach privileged members too; sudo cannot relay it.
+        if signum != signal.SIGKILL:
             try:
-                self.exit_code = self.process.wait(timeout=CHILD_SHUTDOWN_SECONDS)
+                os.killpg(self.process.pid, signum)
+                return
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                pass
+        result = macos_command(
+            self.sudo, "-n", "/bin/kill", "-s", signum.name[3:], "--", f"-{self.process.pid}",
+        )
+        if result.returncode:
+            try:
+                os.killpg(self.process.pid, 0)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                pass
+            raise CaptureError(f"owned capture group did not accept {signum.name}: {result.stderr.strip()}")
+
+    def _try_signal(self, signum):
+        try:
+            self._signal_group(signum)
+        except RUN_ERRORS as exc:
+            self.errors.append(str(exc))
+
+    def request_stop(self):
+        if self.process is not None:
+            if self.process.poll() is None:
+                self._try_signal(signal.SIGINT)
+            else:
+                self.early_exit = True
+
+    def finish(self):
+        if self.process is None:
+            return
+        for signum, timeout in ((None, CHILD_SHUTDOWN_SECONDS), (signal.SIGTERM, 3), (signal.SIGKILL, 3)):
+            if signum is not None:
+                self.errors.append(f"tcpdump did not shut down; escalating to {signum.name}")
+                self._try_signal(signum)
+            try:
+                self.process.wait(timeout=timeout)
+                break
             except subprocess.TimeoutExpired:
-                self._signal_group(signal.SIGTERM)
-                try:
-                    self.exit_code = self.process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self._signal_group(signal.SIGKILL)
-                    self.exit_code = self.process.wait()
+                continue
         else:
-            self.exit_code = self.process.returncode
-        self._join_readers()
+            self.errors.append("tcpdump did not exit after shutdown")
+
+        deadline = time.monotonic() + CHILD_SHUTDOWN_SECONDS
+        for reader in self.readers:
+            reader.join(timeout=max(0, deadline - time.monotonic()))
+        if any(reader.is_alive() for reader in self.readers):
+            self.errors.append("capture output did not reach EOF within shutdown deadline")
+            self._try_signal(signal.SIGKILL)
 
     def result(self):
-        with self.state_lock:
-            return {
-                "control_dns_observed": self.control_seen,
-                "strict_dns_observed": self.strict_seen,
-                "capture_exit_code": self.exit_code,
-                "capture_exited_early": self.early_exit,
-                "capture_error": self.reader_error,
-                "kernel_dropped_packets": self.kernel_drops,
-            }
+        exit_code = self.process.returncode if self.process is not None else None
+        drops = self.stats.get("dropped by kernel")
+        # tcpdump prints the interface drop statistic only when nonzero.
+        interface_drops = self.stats.get("dropped by interface", 0) if drops is not None else None
+        drained = self.eof == {"stdout", "stderr"}
+        errors = list(self.errors)
+        if not self.ready.is_set():
+            errors.append("tcpdump never reported readiness")
+        if not drained:
+            errors.append("capture output did not drain both streams to EOF")
+        if self.early_exit:
+            errors.append("tcpdump exited before shutdown was requested")
+        if exit_code != 0:
+            errors.append(f"tcpdump exit status: {exit_code}")
+        if drops is None:
+            errors.append("tcpdump kernel drop count was unavailable")
+        elif drops or interface_drops:
+            errors.append("tcpdump reported dropped packets")
+        return {
+            "ready": self.ready.is_set(), "link_type": self.link_type,
+            "output_drained": drained, "capture_exit_code": exit_code,
+            "capture_exited_early": self.early_exit, "capture_errors": errors,
+            "kernel_dropped_packets": drops, "interface_dropped_packets": interface_drops,
+            "captured_packets": self.stats.get("captured"),
+            "received_by_filter": self.stats.get("received by filter"),
+            "control_dns_observed": self.control_seen, "strict_dns_observed": self.strict_seen,
+        }
 
 
-def stop_process_group(process, grace_seconds=CHILD_SHUTDOWN_SECONDS):
+def stop_process_group(process):
     if process is None or process.poll() is not None:
         return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        process.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
+    for signum, timeout in ((signal.SIGTERM, CHILD_SHUTDOWN_SECONDS), (signal.SIGKILL, 3)):
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process.pid, signum)
         except ProcessLookupError:
             pass
-        process.wait()
+        try:
+            process.wait(timeout=timeout)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    raise CaptureError("focused xcodebuild did not exit after shutdown")
 
 
 def main(argv):
@@ -203,97 +267,124 @@ def main(argv):
 
     diagnostics = ROOT / "build" / "diagnostics"
     diagnostics.mkdir(parents=True, exist_ok=True)
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+    now = datetime.now(timezone.utc)
+    run_id = now.strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
     log_path = diagnostics / f"epub-isolation-tcpdump-{run_id}.log"
     summary_path = diagnostics / f"epub-isolation-{run_id}.json"
-    started_at = datetime.now(timezone.utc).isoformat()
-    capture = None
-    test_process = None
-    test_exit_code = None
+    captures = {}
+    before = after = None
+    log_file = test_process = None
     timed_out = False
     interrupted = None
-    error = None
-    proof_passed = False
+    errors = []
 
     def interrupt(signum, _frame):
-        raise InterruptedRun(signum)
+        nonlocal interrupted
+        # Do not throw asynchronously while starting or cleaning up an owned child.
+        if interrupted is None:
+            interrupted = signum
 
     previous_handlers = {
         signum: signal.signal(signum, interrupt)
         for signum in (signal.SIGINT, signal.SIGTERM)
     }
     try:
-        with log_path.open("x", encoding="utf-8", buffering=1) as log_file:
-            capture = Capture(log_file)
+        log_file = log_path.open("x", encoding="utf-8", buffering=1)
+        sudo = shutil.which("sudo")
+        if not Path(TCPDUMP).is_file() or sudo is None:
+            raise CaptureError("macOS tcpdump or sudo is unavailable")
+        before = network_snapshot()
+        require_default_coverage(before)
+        log_lock = threading.Lock()
+        captures = {name: Capture(name, sudo, log_file, log_lock) for name in before["interfaces"]}
+        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+        for capture in captures.values():
+            if interrupted is not None:
+                break
             capture.start()
+        while interrupted is None:
+            for name, capture in captures.items():
+                if capture.errors or capture.process.poll() is not None:
+                    raise CaptureError(f"tcpdump failed at startup on {name}")
+            pending = [name for name, capture in captures.items() if not capture.ready.is_set()]
+            if not pending:
+                break
+            if time.monotonic() >= deadline:
+                raise CaptureError("timed out waiting for tcpdump on: " + ", ".join(pending))
+            time.sleep(0.05)
+
+        if interrupted is None:
             test_process = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
-            try:
-                test_exit_code = test_process.wait(timeout=TEST_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                stop_process_group(test_process)
-                test_exit_code = test_process.returncode
-            if capture.process.poll() is not None:
-                capture.early_exit = True
-            capture.stop()
-            result = capture.result()
-            proof_passed = (
-                not timed_out
-                and test_exit_code == 0
-                and result["capture_exit_code"] == 0
-                and not result["capture_exited_early"]
-                and result["capture_error"] is None
-                and result["kernel_dropped_packets"] == 0
-                and result["control_dns_observed"]
-                and not result["strict_dns_observed"]
-            )
-    except InterruptedRun as exc:
-        interrupted = exc.signum
-        error = f"interrupted by signal {interrupted}"
-    except (CaptureError, OSError, subprocess.SubprocessError) as exc:
-        error = str(exc)
+            deadline = time.monotonic() + TEST_TIMEOUT_SECONDS
+            while interrupted is None and test_process.poll() is None:
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    break
+                time.sleep(0.1)
+            after = network_snapshot()
+            require_default_coverage(after)
+            if before["interfaces"] != after["interfaces"]:
+                errors.append("UP IPv4/IPv6 interface set changed during the focused test")
+            if before["default_route_interfaces"] != after["default_route_interfaces"]:
+                errors.append("default-route interfaces changed during the focused test")
+    except RUN_ERRORS as exc:
+        errors.append(str(exc))
     finally:
-        for signum in previous_handlers:
-            signal.signal(signum, signal.SIG_IGN)
         try:
             stop_process_group(test_process)
-        except (CaptureError, OSError, subprocess.SubprocessError) as exc:
-            error = error or f"test cleanup failed: {exc}"
-        try:
-            if capture is not None:
-                capture.stop()
-        except (CaptureError, OSError, subprocess.SubprocessError) as exc:
-            error = error or f"capture cleanup failed: {exc}"
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
-        if error is not None:
-            proof_passed = False
+        except RUN_ERRORS as exc:
+            errors.append(f"test cleanup failed: {exc}")
+        for name, capture in captures.items():
+            try:
+                capture.request_stop()
+            except RUN_ERRORS as exc:
+                errors.append(f"could not stop capture on {name}: {exc}")
+        for name, capture in captures.items():
+            try:
+                capture.finish()
+            except RUN_ERRORS as exc:
+                errors.append(f"capture cleanup failed on {name}: {exc}")
+        if log_file is not None:
+            try:
+                log_file.close()
+            except OSError as exc:
+                errors.append(f"capture log close failed: {exc}")
 
-    result = capture.result() if capture is not None else {
-        "control_dns_observed": False,
-        "strict_dns_observed": False,
-        "capture_exit_code": None,
-        "capture_exited_early": False,
-        "capture_error": None,
-        "kernel_dropped_packets": None,
-    }
+    per_interface = {name: capture.result() for name, capture in captures.items()}
+    ready = bool(per_interface) and all(item["ready"] for item in per_interface.values())
+    control = any(item["control_dns_observed"] for item in per_interface.values())
+    strict = any(item["strict_dns_observed"] for item in per_interface.values())
+    test_exit_code = test_process.returncode if test_process is not None else None
+    if interrupted is not None:
+        errors.append(f"interrupted by signal {interrupted}")
+    proof_passed = (
+        test_exit_code == 0 and not timed_out and not errors and ready and control and not strict
+        and all(not item["capture_errors"] for item in per_interface.values())
+    )
     summary = {
-        "started_at_utc": started_at,
-        "capture_interface": "pktap,all",
+        "started_at_utc": now.isoformat(),
+        "network_before": before,
+        "network_after": after,
+        "capture_interfaces": per_interface,
         "capture_filter": FILTER,
-        "capture_ready": bool(capture and capture.ready.is_set()),
         "capture_log": str(log_path.relative_to(ROOT)),
+        "capture_ready": ready,
+        "control_dns_observed": control,
+        "strict_dns_observed": strict,
         "focused_test": FOCUSED_TEST,
         "xcodebuild_exit_code": test_exit_code,
         "timed_out": timed_out,
         "interrupted_signal": interrupted,
-        "error": error,
-        **result,
+        "error": "; ".join(errors) or None,
         "proof_passed": proof_passed,
     }
-    with summary_path.open("x", encoding="utf-8") as output:
-        json.dump(summary, output, indent=2, sort_keys=True)
-        output.write("\n")
+    try:
+        with summary_path.open("x", encoding="utf-8") as output:
+            json.dump(summary, output, indent=2, sort_keys=True)
+            output.write("\n")
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     print(f"EPUB isolation diagnostics: {summary_path.relative_to(ROOT)}")
 
     if interrupted is not None:
@@ -302,21 +393,16 @@ def main(argv):
         return 124
     if test_exit_code not in (None, 0):
         return test_exit_code
-    if error is not None or not proof_passed:
-        if error:
-            print(f"EPUB isolation capture failed: {error}", file=sys.stderr)
-        elif result["capture_error"]:
-            print(f"EPUB isolation capture failed: {result['capture_error']}", file=sys.stderr)
-        elif result["kernel_dropped_packets"] is None:
-            print("EPUB isolation capture failed: tcpdump drop count was unavailable", file=sys.stderr)
-        elif result["kernel_dropped_packets"]:
-            print("EPUB isolation capture failed: tcpdump dropped packets in the kernel", file=sys.stderr)
-        elif not result["control_dns_observed"]:
-            print("EPUB isolation proof failed: control DNS was not observed", file=sys.stderr)
-        elif result["strict_dns_observed"]:
-            print("EPUB isolation proof failed: strict DNS was observed", file=sys.stderr)
-        else:
-            print("EPUB isolation proof failed: capture or focused test did not complete cleanly", file=sys.stderr)
+    if not proof_passed:
+        failures = errors + [
+            f"{name}: {'; '.join(item['capture_errors'])}"
+            for name, item in per_interface.items() if item["capture_errors"]
+        ]
+        if not control:
+            failures.append("control DNS was not observed")
+        if strict:
+            failures.append("strict DNS was observed")
+        print("EPUB isolation proof failed: " + "; ".join(failures), file=sys.stderr)
         return 1
     return 0
 
