@@ -7,8 +7,7 @@ options:
   developmentLanguage: en
 packages:
   Readium:
-    url: https://github.com/readium/swift-toolkit.git
-    exactVersion: 3.11.1
+    path: build/Readium
   ReadiumZIPFoundation:
     url: https://github.com/readium/ZIPFoundation.git
     exactVersion: 3.0.1
@@ -55,6 +54,7 @@ targets:
     deploymentTarget: '15.0'
     sources:
       - path: BookReaderTests/BookReaderTests.swift
+      - path: BookReaderTests/EPUBIsolationTests.swift
       - path: BookReaderTests/CoreTests.swift
       - path: BookReaderTests/FoundationTests.swift
     dependencies:

@@ -2,15 +2,18 @@
 
 Source is hosted in the private GitHub repository `Hthancder/OpenEbook`. The internal Xcode target and artifact retain the name `BookReader`.
 
-Run **Actions > iOS Reader > Run workflow** on `main`. The existing workflow generates the project, resolves packages, runs core and simulator tests, then builds the unsigned arm64 application. A successful run uploads `BookReader-ios15-unsigned`, containing the IPA and its SHA-256 file. Signing and installation on the device remain the owner's responsibility.
+Run **Actions > iOS Reader > Run workflow** on `main`. The workflow prepares the exact patched Readium source, generates the project, resolves packages, runs core tests and the hosted EPUB isolation probe, then exercises the remaining simulator tests and builds the unsigned arm64 application. A successful run uploads `BookReader-ios15-unsigned`, containing the IPA and its SHA-256 file. Signing and installation on the device remain the owner's responsibility.
 
 ## Checks
 
 ```sh
 swift test --package-path .
-xcodegen generate --spec project.yml
-xcodebuild -project BookReader.xcodeproj -scheme BookReader -sdk iphonesimulator -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' IPHONEOS_DEPLOYMENT_TARGET=15.0 CODE_SIGNING_ALLOWED=NO test
+bash Scripts/generate-project.sh
+python3 Scripts/run-epub-isolation.py -- xcodebuild -project BookReader.xcodeproj -scheme BookReader -sdk iphonesimulator -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' -resultBundlePath build/EPUBIsolationTests.xcresult -only-testing:BookReaderTests/EPUBIsolationTests -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 IPHONEOS_DEPLOYMENT_TARGET=15.0 CODE_SIGNING_ALLOWED=NO test
+xcodebuild -project BookReader.xcodeproj -scheme BookReader -sdk iphonesimulator -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' -skip-testing:BookReaderTests/EPUBIsolationTests IPHONEOS_DEPLOYMENT_TARGET=15.0 CODE_SIGNING_ALLOWED=NO test
 ```
+
+The focused EPUB probe requires macOS, Xcode and permission to use built-in `tcpdump` through noninteractive `sudo`. It exercises a real Readium navigator with hostile reflowable and fixed-layout books, chapter changes, recreated views and standalone SVG. Ordinary WebKit must produce a positive TCP control and a unique `bookreader-control-*.example.com` DNS lookup; restricted content must produce no strict observer connections or `bookreader-strict-*.example.com` DNS lookups. Missing capture or missing positive control fails the probe. Diagnostics remain under `build/diagnostics/`. These changes have not yet passed the hosted probe; they do not supersede the verified PDF/TXT artifact below.
 
 Hosted run `44822095576` at revision `2958437` passed 7 portable core tests, 15 iOS unit tests and 3 simulator UI tests, then built and uploaded `BookReader-ios15-unsigned`. The UI tests opened actual imported PDF/TXT files, searched and selected results, navigated bookmarks, terminated the app and verified the saved reading position and bookmarks after relaunch. The picker opening/cancellation smoke also passed. Screenshots are retained in the `simulator-evidence` artifact.
 

@@ -45,10 +45,10 @@ final class EPUBNavigationModel: ObservableObject {
         Task { @MainActor in
             do {
                 guard let contentRuleListStore else { throw ImportFailure.networkPolicy }
-                let policy = "[{\"trigger\":{\"url-filter\":\"^https?://\"},\"action\":{\"type\":\"block\"}}]"
+                let policy = "[{\"trigger\":{\"url-filter\":\"^(https?|wss?|ftp)://\",\"url-filter-is-case-sensitive\":false},\"action\":{\"type\":\"block\"}}]"
                 let rules = try await contentRuleListStore.compileContentRuleList(forIdentifier: "BookReader.BlockExternal", encodedContentRuleList: policy)
                 guard let rules else { throw ImportFailure.networkPolicy }
-                let httpClient = DefaultHTTPClient()
+                let httpClient = EPUBOfflineHTTPClient()
                 let retriever = AssetRetriever(httpClient: httpClient)
                 let opener = PublicationOpener(parser: DefaultPublicationParser(httpClient: httpClient, assetRetriever: retriever, pdfFactory: DefaultPDFDocumentFactory()))
                 guard let fileURL = url.fileURL else { throw ImportFailure.invalid }
@@ -66,11 +66,11 @@ final class EPUBNavigationModel: ObservableObject {
 
                 let loadedPreferences = EPUBPreferences(fontSize: 1, lineHeight: 1, publisherStyles: false)
                 var config = EPUBNavigatorViewController.Configuration(preferences: loadedPreferences)
+                config.offlineContentRuleList = rules
                 config.preloadPreviousPositionCount = 1
                 config.preloadNextPositionCount = 2
                 let controller = try EPUBNavigatorViewController(publication: publication, initialLocation: initialLocator, config: config)
                 let delegate = EPUBSafeNavigatorDelegate(
-                    rules: rules,
                     onLocation: { [weak self] in self?.onLocation?($0) },
                     onError: { [weak self] error in
                         switch error {
@@ -178,12 +178,10 @@ private var epubDelegateAssociationKey = "book-reader-epub-delegate" as NSString
 
 @MainActor
 private final class EPUBSafeNavigatorDelegate: NSObject, EPUBNavigatorDelegate {
-    private let rules: WKContentRuleList
     private let onLocation: (Locator) -> Void
     private let onError: (NavigatorError) -> Void
 
-    init(rules: WKContentRuleList, onLocation: @escaping (Locator) -> Void, onError: @escaping (NavigatorError) -> Void) {
-        self.rules = rules
+    init(onLocation: @escaping (Locator) -> Void, onError: @escaping (NavigatorError) -> Void) {
         self.onLocation = onLocation
         self.onError = onError
     }
@@ -196,11 +194,8 @@ private final class EPUBSafeNavigatorDelegate: NSObject, EPUBNavigatorDelegate {
         onError(error)
     }
 
-    func navigator(_ navigator: EPUBNavigatorViewController, setupUserScripts userContentController: WKUserContentController) {
-        userContentController.add(rules)
-    }
     func navigator(_ navigator: VisualNavigator, shouldNavigateToLink link: Link) -> Bool {
-        if let url = URL(string: link.href), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+        if let url = URL(string: link.href), url.scheme != nil {
             return false
         }
         return true

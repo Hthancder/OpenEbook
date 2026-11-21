@@ -1,0 +1,214 @@
+diff --git a/Sources/Navigator/EPUB/EPUBNavigatorViewController.swift b/Sources/Navigator/EPUB/EPUBNavigatorViewController.swift
+--- a/Sources/Navigator/EPUB/EPUBNavigatorViewController.swift
++++ b/Sources/Navigator/EPUB/EPUBNavigatorViewController.swift
+@@ -93,10 +93,18 @@
+         /// See https://readium.org/readium-css/docs/CSS19-api.html#reading-system-styles
+         public var readiumCSSRSProperties: CSSRSProperties
+ 
+         /// Logs the state changes when true.
+         public var debugState: Bool
++
++        /// Precompiled rules installed before each web view is created.
++        ///
++        /// When non-nil, also restricts publication responses with an offline
++        /// Content Security Policy and rejects automatic external navigation.
++        /// The caller must supply rules blocking network requests. Nil preserves
++        /// the default navigator behavior.
++        public var offlineContentRuleList: WKContentRuleList?
+ 
+         public init(
+             preferences: EPUBPreferences = .empty,
+             defaults: EPUBDefaults = EPUBDefaults(),
+             editingActions: [EditingAction] = EditingAction.defaultActions,
+@@ -108,11 +116,12 @@
+             preloadPreviousPositionCount: Int = 2,
+             preloadNextPositionCount: Int = 6,
+             decorationTemplates: [Decoration.Style.Id: HTMLDecorationTemplate] = HTMLDecorationTemplate.defaultTemplates(),
+             fontFamilyDeclarations: [AnyHTMLFontFamilyDeclaration] = [],
+             readiumCSSRSProperties: CSSRSProperties = CSSRSProperties(),
+-            debugState: Bool = false
++            debugState: Bool = false,
++            offlineContentRuleList: WKContentRuleList? = nil
+         ) {
+             self.preferences = preferences
+             self.defaults = defaults
+             self.editingActions = editingActions
+             self.disablePageTurnsWhileScrolling = disablePageTurnsWhileScrolling
+@@ -121,10 +130,11 @@
+             self.preloadNextPositionCount = preloadNextPositionCount
+             self.decorationTemplates = decorationTemplates
+             self.fontFamilyDeclarations = fontFamilyDeclarations
+             self.readiumCSSRSProperties = readiumCSSRSProperties
+             self.debugState = debugState
++            self.offlineContentRuleList = offlineContentRuleList
+         }
+ 
+         func contentInset(for sizeClass: UIUserInterfaceSizeClass) -> EPUBContentInsets {
+             contentInset[sizeClass]
+                 ?? contentInset[.regular]
+diff --git a/Sources/Navigator/EPUB/EPUBNavigatorViewModel.swift b/Sources/Navigator/EPUB/EPUBNavigatorViewModel.swift
+--- a/Sources/Navigator/EPUB/EPUBNavigatorViewModel.swift
++++ b/Sources/Navigator/EPUB/EPUBNavigatorViewModel.swift
+@@ -50,11 +50,15 @@
+     ) {
+         let assetsDirectory = Bundle.module.resourceURL!.fileURL!
+             .appendingPath("Assets/Static", isDirectory: true)
+ 
+         let formatSniffer = DefaultFormatSniffer()
+-        let server = WebViewServer(scheme: "readium", formatSniffer: formatSniffer)
++        let server = WebViewServer(
++            scheme: "readium",
++            formatSniffer: formatSniffer,
++            restrictPublicationContent: config.offlineContentRuleList != nil
++        )
+ 
+         // Serve static assets directory.
+         let assetsBaseURL = server.serve(directory: assetsDirectory, at: "assets")
+ 
+         self.init(
+diff --git a/Sources/Navigator/EPUB/EPUBSpreadView.swift b/Sources/Navigator/EPUB/EPUBSpreadView.swift
+--- a/Sources/Navigator/EPUB/EPUBSpreadView.swift
++++ b/Sources/Navigator/EPUB/EPUBSpreadView.swift
+@@ -72,10 +72,13 @@
+         self.animatedLoad = animatedLoad
+ 
+         let config = WKWebViewConfiguration()
+         config.setURLSchemeHandler(viewModel.server, forURLScheme: viewModel.server.scheme)
+         config.mediaTypesRequiringUserActionForPlayback = .all
++        if let rules = viewModel.config.offlineContentRuleList {
++            config.userContentController.add(rules)
++        }
+ 
+         // Disable the Apple Intelligence Writing tools in the web views.
+         // See https://github.com/readium/swift-toolkit/issues/509#issuecomment-2577780749
+         if #available(iOS 18.0, *) {
+             config.writingToolsBehavior = .none
+@@ -659,10 +662,22 @@
+                 } else {
+                     delegate?.spreadView(self, didTapOnExternalURL: url)
+                 }
+ 
+                 policy = .cancel
++            }
++        }
++
++        if viewModel.config.offlineContentRuleList != nil {
++            // New windows and automatic navigation must stay inside the server.
++            guard
++                navigationAction.targetFrame != nil,
++                let url = navigationAction.request.url,
++                url.scheme == viewModel.server.scheme || url.absoluteString == "about:blank"
++            else {
++                decisionHandler(.cancel)
++                return
+             }
+         }
+ 
+         decisionHandler(policy)
+     }
+diff --git a/Sources/Navigator/EPUB/WebViewServer.swift b/Sources/Navigator/EPUB/WebViewServer.swift
+--- a/Sources/Navigator/EPUB/WebViewServer.swift
++++ b/Sources/Navigator/EPUB/WebViewServer.swift
+@@ -17,13 +17,19 @@
+     let scheme: String
+ 
+     /// Format sniffer used to infer the media type of served resources.
+     let formatSniffer: FormatSniffer
+ 
+-    init(scheme: String, formatSniffer: FormatSniffer) {
++    /// Whether publication resources must use the offline content policy.
++    private let restrictPublicationContent: Bool
++
++    private static let offlineContentSecurityPolicy = "default-src 'none'; connect-src 'none'; script-src 'none'; style-src readium: 'unsafe-inline'; img-src readium: data:; font-src readium:; media-src readium:; frame-src readium:; child-src readium:; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
++
++    init(scheme: String, formatSniffer: FormatSniffer, restrictPublicationContent: Bool = false) {
+         self.scheme = scheme
+         self.formatSniffer = formatSniffer
++        self.restrictPublicationContent = restrictPublicationContent
+         super.init()
+     }
+ 
+     // MARK: - Route registration
+ 
+@@ -205,15 +211,18 @@
+             resource = newResource.buffered(size: 256 * 1024)
+             mediaType = newMediaType
+             resourceCache.set(relativeURL, resource: resource, mediaType: mediaType)
+         }
+ 
++        // Only publication resources receive CSP. Trusted static assets and the
++        // bundled fixed-layout wrapper keep their reading-system scripts.
+         await serveResource(
+             resource,
+             with: urlSchemeTask,
+             mediaType: mediaType,
+-            requestURL: requestURL
++            requestURL: requestURL,
++            restrictContent: restrictPublicationContent
+         )
+     }
+ 
+     /// Reads a local file and sends it as a response.
+     ///
+@@ -238,22 +247,23 @@
+     private func serveResource(
+         _ resource: Resource,
+         with urlSchemeTask: WKURLSchemeTask,
+         mediaType: MediaType?,
+         requestURL: URL,
+-        allowCrossOrigin: Bool = false
++        allowCrossOrigin: Bool = false,
++        restrictContent: Bool = false
+     ) async {
+         // Try to serve a byte range if the client requested one and the
+         // resource length is known.
+         if
+             let totalLength = await (try? resource.estimatedLength().get()).flatMap({ $0 }),
+             let range = urlSchemeTask.request.byteRange(in: totalLength)
+         {
+             let result = await resource.read(range: range)
+             switch result {
+             case let .success(data):
+-                await respond(urlSchemeTask, with: data, range: range, totalLength: totalLength, mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
++                await respond(urlSchemeTask, with: data, range: range, totalLength: totalLength, mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin, restrictContent: restrictContent)
+             case let .failure(error):
+                 log(.error, "Failed to read resource \(requestURL.path) range \(range): \(error)")
+                 await fail(urlSchemeTask, with: URLError(.resourceUnavailable))
+             }
+             return
+@@ -261,11 +271,11 @@
+ 
+         // Full read fallback.
+         let result = await resource.read()
+         switch result {
+         case let .success(data):
+-            await respond(urlSchemeTask, with: data, range: nil, totalLength: UInt64(data.count), mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
++            await respond(urlSchemeTask, with: data, range: nil, totalLength: UInt64(data.count), mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin, restrictContent: restrictContent)
+         case let .failure(error):
+             log(.error, "Failed to read resource \(requestURL.path): \(error)")
+             await fail(urlSchemeTask, with: URLError(.resourceUnavailable))
+         }
+     }
+@@ -292,16 +302,21 @@
+         with data: Data,
+         range: Range<UInt64>?,
+         totalLength: UInt64,
+         mediaType: MediaType?,
+         url: URL,
+-        allowCrossOrigin: Bool
++        allowCrossOrigin: Bool,
++        restrictContent: Bool
+     ) async {
+         var headers: [String: String] = [
+             "Content-Length": "\(data.count)",
+             "Accept-Ranges": "bytes",
+         ]
++
++        if restrictContent {
++            headers["Content-Security-Policy"] = Self.offlineContentSecurityPolicy
++        }
+ 
+         if allowCrossOrigin {
+             // Static assets (e.g. fonts declared with
+             // `fontFamilyDeclarations`) are served under a different origin
+             // than the publication documents referencing them

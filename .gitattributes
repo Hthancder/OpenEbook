@@ -1,0 +1,4 @@
+Scripts/*.sh text eol=lf
+Scripts/*.py text eol=lf
+Scripts/Patches/*.patch text eol=lf
+Scripts/Patches/*.sha256 text eol=lf
