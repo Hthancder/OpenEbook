@@ -184,14 +184,15 @@ class Capture:
     def request_stop(self):
         if self.process is not None:
             if self.process.poll() is None:
-                self._try_signal(signal.SIGINT)
+                # tcpdump handles SIGTERM as normal shutdown and flushes its statistics.
+                self._try_signal(signal.SIGTERM)
             else:
                 self.early_exit = True
 
     def finish(self):
         if self.process is None:
             return
-        for signum, timeout in ((None, CHILD_SHUTDOWN_SECONDS), (signal.SIGTERM, 3), (signal.SIGKILL, 3)):
+        for signum, timeout in ((None, CHILD_SHUTDOWN_SECONDS), (signal.SIGKILL, 3)):
             if signum is not None:
                 self.errors.append(f"tcpdump did not shut down; escalating to {signum.name}")
                 self._try_signal(signum)

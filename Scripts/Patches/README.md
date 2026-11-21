@@ -68,13 +68,8 @@ The scheme allowlist is not a native networking policy or a full URL-origin vali
 
 ## Runtime limits and release gate
 
-This source patch is not evidence of zero network egress. Hosted runs `44880846581` and `44884073324` compiled the earlier four-file version but failed runtime acceptance. The expanded fixed-frame and SVG repairs have not yet been built on Apple platforms. Parent integration owns compile checks, patch applicability/hash checks and native runtime acceptance.
+This source patch is not evidence of zero network egress. Hosted runs `44880846581` and `44884073324` compiled the earlier four-file version but failed runtime acceptance. Run `44903065483` attempt 2 compiled the expanded patch and passed both EPUB XCTest cases, including hostile reflowable/fixed first loads, later chapters, standalone SVG, bitmap and recreated views. The separate DNS capture verdict still failed because SIGINT did not stop its capture processes; a successful rendering test alone cannot unlock EPUB. Parent integration owns compile checks, patch applicability/hash checks and native runtime acceptance.
 
-Still unverified on the target WebKit runtime:
-
-- Enforcement of CSP delivered with custom-scheme `HTTPURLResponse`, including standalone SVG and fixed-layout publication frames.
-- Whether Readium's injected `WKUserScript` and native JavaScript evaluation keep working with `script-src 'none'`; do not relax author-script policy to hide a rendering failure.
-- First-load, preload and recreated-view request blocking, including WS/WSS and nested contexts. Content rules and navigation delegates are layered controls, not a substitute for an observed hostile-publication test.
-- Nil-target popup and automatic navigation behavior, including redirects and non-HTTP schemes.
+The hosted XCTest exercised CSP-protected custom-scheme HTML/SVG/fixed frames, injected reading-system scripts and native frame evaluation without enabling publisher scripts. It also exercised blocked remote resources, strict TCP observers and later/recreated views. Remaining acceptance still requires the complete capture lifecycle to pass with positive DNS control, unchanged route/interface coverage, drained readers and zero drops. Nil-target popup behavior, arbitrary redirects and every non-HTTP navigation variant are not separately established by these cases.
 
 Keep `ImportService` and `ReaderHost` EPUB refusal locks in place until an actual navigator safety probe passes. A positive control must first prove that the observer sees ordinary WebKit requests. The hostile EPUB must render packaged content with zero observed publication-origin requests at first load, later chapters and view recreation. Cover remote CSS, images, fonts, scripts, frames, script-driven connections and automatic navigation. Keep native HTTP requests fail-closed separately, then verify real import, TOC, preferences, search, bookmarks and reopen before releasing a replacement IPA. No app unlock is included here.
