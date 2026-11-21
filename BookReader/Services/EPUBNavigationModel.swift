@@ -45,7 +45,7 @@ final class EPUBNavigationModel: ObservableObject {
         Task { @MainActor in
             do {
                 guard let contentRuleListStore else { throw ImportFailure.networkPolicy }
-                let policy = "[{\"trigger\":{\"url-filter\":\"^(https?|wss?|ftp)://\",\"url-filter-is-case-sensitive\":false},\"action\":{\"type\":\"block\"}}]"
+                let policy = "[{\"trigger\":{\"url-filter\":\"^https?://\",\"url-filter-is-case-sensitive\":false},\"action\":{\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^wss?://\",\"url-filter-is-case-sensitive\":false},\"action\":{\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^ftp://\",\"url-filter-is-case-sensitive\":false},\"action\":{\"type\":\"block\"}}]"
                 let rules = try await contentRuleListStore.compileContentRuleList(forIdentifier: "BookReader.BlockExternal", encodedContentRuleList: policy)
                 guard let rules else { throw ImportFailure.networkPolicy }
                 let httpClient = EPUBOfflineHTTPClient()

@@ -60,7 +60,7 @@ class Capture:
             raise CaptureError("macOS tcpdump or sudo is unavailable")
 
         self.process = subprocess.Popen(
-            [sudo, "-n", tcpdump, "-i", "pktap,all", "-l", "-n", "-s", "0", "-vvv", FILTER],
+            [sudo, "-n", tcpdump, "-i", "pktap,all", "-B", "16384", "-l", "-n", "-s", "0", "-vvv", FILTER],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -113,7 +113,9 @@ final class EPUBIsolationTests: XCTestCase {
     private func compileOfflineRules() async throws -> WKContentRuleList {
         let policy = """
         [
-          {"trigger":{"url-filter":"^(https?|wss?|ftp)://","url-filter-is-case-sensitive":false},"action":{"type":"block"}}
+          {"trigger":{"url-filter":"^https?://","url-filter-is-case-sensitive":false},"action":{"type":"block"}},
+          {"trigger":{"url-filter":"^wss?://","url-filter-is-case-sensitive":false},"action":{"type":"block"}},
+          {"trigger":{"url-filter":"^ftp://","url-filter-is-case-sensitive":false},"action":{"type":"block"}}
         ]
         """
         guard let rules = try await WKContentRuleListStore.default().compileContentRuleList(
@@ -362,7 +364,6 @@ private final class TrafficObserver {
                 self.lock.lock(); self.requests += 1; self.lock.unlock()
                 self.respond(to: connection, request: String(decoding: data, as: UTF8.self))
             }
-            if !isComplete { self.receive(on: connection) }
         }
     }
 
@@ -375,10 +376,9 @@ private final class TrafficObserver {
         else if path.hasSuffix(".js") { body = Data("window.remoteRan = true".utf8); type = "application/javascript" }
         else if path.hasSuffix(".png") { body = Data([137, 80, 78, 71, 13, 10, 26, 10]); type = "image/png" }
         else { body = Data("<html><body>remote</body></html>".utf8); type = "text/html" }
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nConnection: keep-alive\r\n\r\n"
-        connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { [weak self, weak connection] _ in
-            guard let self, let connection else { return }
-            self.receive(on: connection)
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { [weak connection] _ in
+            connection?.cancel()
         })
     }
 }

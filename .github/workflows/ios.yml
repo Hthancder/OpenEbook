@@ -73,6 +73,16 @@ jobs:
       - name: Prove EPUB first-load DNS isolation
         run: |
           set -euo pipefail
+          xcodebuild \
+            -project BookReader.xcodeproj \
+            -scheme BookReader \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:BookReaderTests/EPUBIsolationTests \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
           python3 Scripts/run-epub-isolation.py -- \
             xcodebuild \
               -project BookReader.xcodeproj \
@@ -86,7 +96,7 @@ jobs:
               -maximum-test-execution-time-allowance 180 \
               IPHONEOS_DEPLOYMENT_TARGET=15.0 \
               CODE_SIGNING_ALLOWED=NO \
-              test
+              test-without-building
       - name: Test iOS app and UI import smoke test
         run: |
           set -euo pipefail
